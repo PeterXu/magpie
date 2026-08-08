@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>magpie streamer</title></head>
+<body>
+<canvas id="c"></canvas>
+<script>
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  // Viewport passed via query (?w=&h=); used as the canvas/stream size.
+  const params = new URLSearchParams(location.search);
+  const W = Number(params.get("w") || 1280);
+  const H = Number(params.get("h") || 800);
+  canvas.width = W; canvas.height = H;
+
+  let stream = canvas.captureStream(15);
+  let pc = null;
+
+  let lastFrame = null;
+  window.__internalWsConnected = false;
+  // Receive JPEG frames from Node and draw them.
+  function connectInternal() {
+    const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/internal");
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      window.__internalWsConnected = true;
+    };
+    ws.onmessage = async (e) => {
+      try {
+        const bmp = await createImageBitmap(new Blob([e.data]));
+        ctx.drawImage(bmp, 0, 0, W, H);
+        if (lastFrame) lastFrame.close();
+        lastFrame = bmp;
+      } catch {}
+    };
+    ws.onclose = () => {
+      window.__internalWsConnected = false;
+      setTimeout(connectInternal, 500);
+    };
+  }
+  connectInternal();
+
+  // Force the canvas to continuously update so captureStream generates frames
+  // even when no new JPEG frames arrive. This is needed because captureStream
+  // only generates frames when the canvas changes.
+  setInterval(() => {
+    if (lastFrame) {
+      ctx.drawImage(lastFrame, 0, 0);
+    }
+  }, 50);
+
+  // Driven by Node via page.evaluate when a client offer arrives.
+  window.relayOffer = async (offer) => {
+    if (pc) { try { pc.close(); } catch {} }
+    pc = new RTCPeerConnection();
+    pc.addTrack(stream.getVideoTracks()[0]);
+    await pc.setRemoteDescription({ type: "offer", sdp: offer });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 3000);
+      pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); } };
+    });
+    return pc.localDescription.sdp;
+  };
+
+  window.__ready = true;
+</script>
+</body>
+</html>
