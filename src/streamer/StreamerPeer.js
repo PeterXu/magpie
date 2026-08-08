@@ -6,7 +6,8 @@ export class StreamerPeer {
     this._frameSocket = null;
   }
 
-  async start({ streamerUrl }) {
+  async start({ streamerUrl, iceServers = [] }) {
+    this._iceServers = iceServers;
     this._context = await this._browser.newContext();
     this._page = await this._context.newPage();
     await this._page.goto(streamerUrl, { waitUntil: "domcontentloaded" });
@@ -24,7 +25,7 @@ export class StreamerPeer {
   }
 
   async relayOffer(offerSdp) {
-    return this._page.evaluate((o) => window.relayOffer(o), offerSdp);
+    return this._page.evaluate((opts) => window.relayOffer(opts.offer, opts.iceServers), { offer: offerSdp, iceServers: this._iceServers ?? [] });
   }
 
   async stop() {

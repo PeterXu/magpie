@@ -49,9 +49,9 @@
   }, 50);
 
   // Driven by Node via page.evaluate when a client offer arrives.
-  window.relayOffer = async (offer) => {
+  window.relayOffer = async (offer, iceServers) => {
     if (pc) { try { pc.close(); } catch {} }
-    pc = new RTCPeerConnection();
+    pc = new RTCPeerConnection({ iceServers: iceServers || [] });
     pc.addTrack(stream.getVideoTracks()[0]);
     await pc.setRemoteDescription({ type: "offer", sdp: offer });
     const answer = await pc.createAnswer();

@@ -24,11 +24,11 @@ const browser = await chromium.launch({
 });
 try {
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
-  await page.goto("http://localhost:8080/", { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto("http://localhost:8080/?relay=1", { waitUntil: "domcontentloaded", timeout: 30000 });
 
-  // 3. client.html establishes RTCPeerConnection (recvonly) + attaches the
-  //    received track via getReceivers() polling. videoWidth>0 means the
-  //    streamer's canvas/captureStream frames actually decoded over WebRTC.
+  // 3. client.html with ?relay=1 forces iceTransportPolicy: relay, so
+  //    RTCPeerConnection uses only TURN candidates (no host candidates).
+  //    videoWidth>0 means the streamer's frames decoded via TURN relay.
   await page.waitForFunction(
     () => { const v = document.getElementById("v"); return v && v.videoWidth > 0; },
     { timeout: 30000 }

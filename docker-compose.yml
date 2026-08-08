@@ -13,9 +13,29 @@ services:
       - MAGPIE_NO_SANDBOX=1
       - HOST=0.0.0.0
       - PORT=8080
+      - MAGPIE_HOST_IP=${MAGPIE_HOST_IP:-}
+      - MAGPIE_TURN_USER=${MAGPIE_TURN_USER:-magpie}
+      - MAGPIE_TURN_PASS=${MAGPIE_TURN_PASS:-magpie}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  coturn:
+    image: coturn/coturn:latest
+    command:
+      - "-c"
+      - "/turnserver.conf"
+      - "--user"
+      - "${MAGPIE_TURN_USER:-magpie}:${MAGPIE_TURN_PASS:-magpie}"
+      - "--external-ip"
+      - "${MAGPIE_HOST_IP:-127.0.0.1}"
+    volumes:
+      - "./docker/turnserver.conf:/turnserver.conf:ro"
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+    restart: unless-stopped

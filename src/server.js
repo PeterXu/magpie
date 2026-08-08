@@ -19,7 +19,7 @@ async function serveFile(res, file, type) {
   }
 }
 
-export function createServer({ browserSession, inputChannel, streamerPeer }) {
+export function createServer({ browserSession, inputChannel, streamerPeer, clientIceServers = [] }) {
   const server = http.createServer();
 
   server.on("request", (req, res) => {
@@ -56,7 +56,7 @@ export function createServer({ browserSession, inputChannel, streamerPeer }) {
       }
     };
 
-    send({ t: "hello", viewport: browserSession.getViewport(), url: browserSession.getUrl() });
+    send({ t: "hello", viewport: browserSession.getViewport(), url: browserSession.getUrl(), iceServers: clientIceServers });
 
     ws.on("message", async (raw) => {
       let msg;

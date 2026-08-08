@@ -25,10 +25,13 @@
 
     function connect() {
       const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/signaling");
-      ws.onopen = startPeer;
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if (msg.t === "hello") urlInput.value = msg.url;
+        if (msg.t === "hello") {
+          urlInput.value = msg.url;
+          window._iceServers = msg.iceServers || [];
+          if (!pc) startPeer();                 // start AFTER we have iceServers
+        }
         else if (msg.t === "answer") pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }).then(attachReceiver);
         else if (msg.t === "navigate-result" && msg.url) urlInput.value = msg.url;
         else if (msg.t === "reload") location.reload();
@@ -38,12 +41,29 @@
     }
 
     async function startPeer() {
-      pc = new RTCPeerConnection();
+      const iceServers = window._iceServers || [];
+      const relay = new URLSearchParams(location.search).get("relay") === "1";
+      const rtcConfig = { iceServers };
+      if (relay) rtcConfig.iceTransportPolicy = "relay";
+      pc = new RTCPeerConnection(rtcConfig);
       pc.addTransceiver("video", { direction: "recvonly" });
       pc.ontrack = (e) => { video.srcObject = e.streams[0]; };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      await pc.setLocalDescription(await pc.createOffer());
+      // Wait for ICE gathering so the TURN relay candidate is included in the
+      // offer (TURN allocation is a round-trip; sending early omits it).
+      await waitForIceGathering(pc);
+      window._lastOffer = pc.localDescription.sdp;   // debug aid for verification
       window._ws.send(JSON.stringify({ t: "offer", sdp: pc.localDescription.sdp }));
+    }
+
+    function waitForIceGathering(pc, timeoutMs = 5000) {
+      if (pc.iceGatheringState === "complete") return Promise.resolve();
+      return new Promise((resolve) => {
+        const timer = setTimeout(resolve, timeoutMs);
+        pc.addEventListener("icegatheringstatechange", () => {
+          if (pc.iceGatheringState === "complete") { clearTimeout(timer); resolve(); }
+        });
+      });
     }
 
     // ontrack is unreliable in headless Chromium; poll-attach the receiver track as a fallback.
