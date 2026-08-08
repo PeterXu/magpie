@@ -1,0 +1,21 @@
+services:
+  magpie:
+    build: .
+    # Publish 8080 on the host (reachable on macOS and Linux). With this bridge
+    # setup, WebRTC video reaches a browser ON THE SAME Linux host (its docker
+    # bridge 172.x is host-routable). For LAN/remote clients switch to
+    # network_mode: host (Linux) — see README "Networking".
+    ports:
+      - "8080:8080"
+    shm_size: 2gb            # Chromium stability (default 64MB /dev/shm can crash)
+    environment:
+      - MAGPIE_URL=https://gitee.com
+      - MAGPIE_NO_SANDBOX=1
+      - HOST=0.0.0.0
+      - PORT=8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

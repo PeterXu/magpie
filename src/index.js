@@ -1,15 +1,17 @@
 import { chromium } from "playwright";
+import { chromiumLaunchOptions } from "./browser/launch-options.js";
 import { BrowserSession } from "./browser/BrowserSession.js";
 import { StreamerPeer } from "./streamer/StreamerPeer.js";
 import { InputChannel } from "./webrtc/InputChannel.js";
 import { createServer } from "./server.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
+const HOST = process.env.HOST ?? "0.0.0.0";
 const DEFAULT_URL = process.env.MAGPIE_URL ?? "https://gitee.com";
 const WIDTH = 1280, HEIGHT = 800;
 
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch(chromiumLaunchOptions());
 
   const browserSession = new BrowserSession({ url: DEFAULT_URL, width: WIDTH, height: HEIGHT, browser });
   await browserSession.start();
@@ -18,7 +20,7 @@ async function main() {
   const inputChannel = new InputChannel({ browserSession, viewportProvider: browserSession });
 
   const server = createServer({ browserSession, inputChannel, streamerPeer });
-  await new Promise((r) => server.listen(PORT, "127.0.0.1", r));
+  await new Promise((r) => server.listen(PORT, HOST, r));
   const base = `http://127.0.0.1:${PORT}`;
 
   await streamerPeer.start({ streamerUrl: `${base}/streamer.html?w=${WIDTH}&h=${HEIGHT}` });

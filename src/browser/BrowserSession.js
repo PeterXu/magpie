@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { chromiumLaunchOptions } from "./launch-options.js";
 
 export class BrowserSession {
   constructor({ url = "https://gitee.com", width = 1280, height = 800, browser } = {}) {
@@ -32,7 +33,7 @@ export class BrowserSession {
       this._browser = this._injectedBrowser;
       this._ownsBrowser = false;
     } else {
-      this._browser = await chromium.launch({ headless: true });
+      this._browser = await chromium.launch(chromiumLaunchOptions());
       this._ownsBrowser = true;
     }
     this._context = await this._browser.newContext({ viewport: { width: this._width, height: this._height } });
