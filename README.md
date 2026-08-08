@@ -26,6 +26,7 @@ npm test        # node:test unit + integration + spike + E2E
 ```
 
 Design: `docs/superpowers/specs/2026-08-08-magpie-remote-browser-design.md`.
+Comparison with neko: `docs/superpowers/2026-08-08-magpie-vs-neko.md`.
 
 ## Docker
 
