@@ -11,7 +11,7 @@ function startWithMocks() {
     _lastNav: null,
   };
   const inputChannel = { handle: () => {} };
-  const streamerPeer = { relayOffer: async () => "ANSWER-FROM-MOCK", setFrameSocket: () => {}, pushFrame: () => {}, stop: async () => {} };
+  const streamerPeer = { relayOffer: async () => "ANSWER-FROM-MOCK", setFrameSocket: () => {}, pushFrame: () => {}, stop: async () => {}, getSenderCodecs: () => ["av1", "vp9", "vp8", "h264"] };
   const server = createServer({ browserSession, inputChannel, streamerPeer });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, browserSession, port: server.address().port })));
 }

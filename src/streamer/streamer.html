@@ -6,13 +6,19 @@
 <script>
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
-  // Viewport passed via query (?w=&h=); used as the canvas/stream size.
+  // Viewport + caps via query (?w=&h=&fps=&bitrate=&maxFps=&degradation=).
   const params = new URLSearchParams(location.search);
   const W = Number(params.get("w") || 1280);
   const H = Number(params.get("h") || 800);
+  const FPS = Number(params.get("fps")) || 10;             // captureStream rate; default 10
+  const BITRATE = Number(params.get("bitrate")) || 0;      // sender maxBitrate (bps); 0 = unset
+  const MAXFPS = Number(params.get("maxFps")) || 0;        // sender maxFramerate; 0 = unset
+  const DEGRADATION = params.get("degradation") || "";     // sender degradationPreference; "" = unset
   canvas.width = W; canvas.height = H;
+  // Debug hook: parsed caps (matches the window.__* convention used elsewhere here).
+  window.__magpieCfg = { FPS, BITRATE, MAXFPS, DEGRADATION };
 
-  let stream = canvas.captureStream(15);
+  let stream = canvas.captureStream(FPS);
   let pc = null;
 
   let lastFrame = null;
@@ -52,7 +58,19 @@
   window.relayOffer = async (offer, iceServers) => {
     if (pc) { try { pc.close(); } catch {} }
     pc = new RTCPeerConnection({ iceServers: iceServers || [] });
-    pc.addTrack(stream.getVideoTracks()[0]);
+    const sender = pc.addTrack(stream.getVideoTracks()[0]);
+    // Optional sender caps (maxBitrate/maxFramerate/degradationPreference).
+    // Wrapped: browser/timing quirks must not break the offer — fall back to defaults.
+    if (BITRATE || MAXFPS || DEGRADATION) {
+      try {
+        const p = sender.getParameters();
+        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        if (BITRATE) p.encodings[0].maxBitrate = BITRATE;
+        if (MAXFPS) p.encodings[0].maxFramerate = MAXFPS;
+        if (DEGRADATION) p.degradationPreference = DEGRADATION;
+        await sender.setParameters(p);
+      } catch (e) { console.warn("magpie: setParameters failed", e); }
+    }
     await pc.setRemoteDescription({ type: "offer", sdp: offer });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);

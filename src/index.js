@@ -5,11 +5,13 @@ import { StreamerPeer } from "./streamer/StreamerPeer.js";
 import { InputChannel } from "./webrtc/InputChannel.js";
 import { createServer } from "./server.js";
 import { buildIceServers } from "./webrtc/ice-servers.js";
+import { loadConfig } from "./config.js";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const DEFAULT_URL = process.env.MAGPIE_URL ?? "https://gitee.com";
-const WIDTH = 1280, HEIGHT = 800;
+const cfg = loadConfig();
 const HOST_IP = process.env.MAGPIE_HOST_IP ?? "";
 const TURN_USER = process.env.MAGPIE_TURN_USER ?? "magpie";
 const TURN_PASS = process.env.MAGPIE_TURN_PASS ?? "magpie";
@@ -19,10 +21,24 @@ const TURN_PASS = process.env.MAGPIE_TURN_PASS ?? "magpie";
 const serverIceServers = HOST_IP ? buildIceServers({ host: "coturn", user: TURN_USER, pass: TURN_PASS }) : [];
 const clientIceServers = buildIceServers({ host: HOST_IP, user: TURN_USER, pass: TURN_PASS });
 
+// Pure: build the streamer page URL from cfg. Exported for unit testing.
+export function buildStreamerUrl(base, c) {
+  const w = c.webrtc;
+  const parts = [
+    `w=${c.viewport.width}`,
+    `h=${c.viewport.height}`,
+    `fps=${w.streamFps}`,
+  ];
+  if (w.maxBitrate) parts.push(`bitrate=${w.maxBitrate}`);
+  if (w.maxFramerate) parts.push(`maxFps=${w.maxFramerate}`);
+  if (w.degradation) parts.push(`degradation=${w.degradation}`);
+  return `${base}/streamer.html?${parts.join("&")}`;
+}
+
 async function main() {
   const browser = await chromium.launch(chromiumLaunchOptions());
 
-  const browserSession = new BrowserSession({ url: DEFAULT_URL, width: WIDTH, height: HEIGHT, browser });
+  const browserSession = new BrowserSession({ url: DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, browser, screencast: cfg.screencast });
   await browserSession.start();
 
   const streamerPeer = new StreamerPeer({ browser });
@@ -32,7 +48,7 @@ async function main() {
   await new Promise((r) => server.listen(PORT, HOST, r));
   const base = `http://127.0.0.1:${PORT}`;
 
-  await streamerPeer.start({ streamerUrl: `${base}/streamer.html?w=${WIDTH}&h=${HEIGHT}`, iceServers: serverIceServers });
+  await streamerPeer.start({ streamerUrl: buildStreamerUrl(base, cfg), iceServers: serverIceServers });
 
   // Pump screencast frames into the streamer page.
   await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
@@ -56,4 +72,7 @@ async function main() {
   process.on("SIGTERM", shutdown);
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().catch((err) => { console.error(err); process.exit(1); });
+}

@@ -17,7 +17,8 @@
     <input id="url" placeholder="https://..." />
     <button id="go">Go</button>
   </div>
-  <script>
+  <script type="module">
+    import { pickCodec } from "/codec-pick.js";
     const video = document.getElementById("v");
     const urlInput = document.getElementById("url");
     const goBtn = document.getElementById("go");
@@ -30,7 +31,8 @@
         if (msg.t === "hello") {
           urlInput.value = msg.url;
           window._iceServers = msg.iceServers || [];
-          if (!pc) startPeer();                 // start AFTER we have iceServers
+          window._magpieCodecs = msg.magpieCodecs || [];
+          if (!pc) startPeer();                 // start AFTER we have iceServers + magpieCodecs
         }
         else if (msg.t === "answer") pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }).then(attachReceiver);
         else if (msg.t === "navigate-result" && msg.url) urlInput.value = msg.url;
@@ -40,13 +42,31 @@
       window._ws = ws;
     }
 
+    // Offerer-side codec selection. The encoder follows the OFFER's m-line order,
+    // so this MUST happen on the client (offerer), not the streamer. Narrow the
+    // video m-line to the single codec both magpie and this client support, per
+    // the fixed chain [av1,vp9,vp8,h264]. No-op if none mutually supported.
+    function narrowCodec(tr) {
+      try {
+        const recv = RTCRtpReceiver.getCapabilities("video");
+        if (!recv || !recv.codecs) return;
+        const clientSet = [...new Set(recv.codecs.map((c) => (c.mimeType.split("/")[1] || "").toLowerCase()))];
+        const picked = pickCodec(window._magpieCodecs || [], clientSet);
+        if (!picked) return;
+        const want = recv.codecs.filter((c) => (c.mimeType.split("/")[1] || "").toLowerCase() === picked);
+        const rtx = recv.codecs.filter((c) => c.mimeType === "video/rtx");
+        tr.setCodecPreferences([...want, ...rtx]);
+      } catch (e) { console.warn("magpie: codec narrow failed", e); }
+    }
+
     async function startPeer() {
       const iceServers = window._iceServers || [];
       const relay = new URLSearchParams(location.search).get("relay") === "1";
       const rtcConfig = { iceServers };
       if (relay) rtcConfig.iceTransportPolicy = "relay";
       pc = new RTCPeerConnection(rtcConfig);
-      pc.addTransceiver("video", { direction: "recvonly" });
+      const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
+      narrowCodec(transceiver);               // offerer-side: force single preferred codec
       pc.ontrack = (e) => { video.srcObject = e.streams[0]; };
       await pc.setLocalDescription(await pc.createOffer());
       // Wait for ICE gathering so the TURN relay candidate is included in the

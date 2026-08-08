@@ -40,6 +40,19 @@ test("e2e: client sees video and a click reaches the target page", async () => {
     await ctx.browserSession._page.waitForFunction(() => document.getElementById("count").textContent !== "0", { timeout: 3000 });
     const count = await ctx.browserSession._page.evaluate(() => document.getElementById("count").textContent);
     assert.equal(count, "1");
+
+    // Offerer-side codec selection: the client's offer must be narrowed to a
+    // single preferred codec (the encoder follows the offer's m-line order).
+    const offer = await client.evaluate(() => window._lastOffer);
+    const real = new Set();
+    for (const line of (offer || "").split("\r\n")) {
+      if (line.startsWith("a=rtpmap:")) {
+        const name = line.split(" ")[1].split("/")[0].toLowerCase();
+        if (!["rtx", "red", "ulpfec", "flexfec-03"].includes(name)) real.add(name);
+      }
+    }
+    assert.equal(real.size, 1, `offer video m-line should have one real codec, got ${[...real]}`);
+    assert.ok(["av1", "vp9", "vp8", "h264"].includes([...real][0]), `unexpected codec ${[...real][0]}`);
   } finally {
     await client.close();
     ctx.server.close();

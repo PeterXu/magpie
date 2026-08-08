@@ -19,9 +19,18 @@ npm start                         # node src/index.js -> http://localhost:8080/
 npm test                          # node --test (unit + integration + spike + e2e)
 ```
 
-Env (defaults in `src/index.js`): `PORT` (8080), `HOST` (`0.0.0.0`; `127.0.0.1`
-for local-only), `MAGPIE_URL` (https://gitee.com), `MAGPIE_NO_SANDBOX` (`1` only
-in Docker).
+Env (defaults in `src/index.js` + `src/config.js`): `PORT` (8080), `HOST`
+(`0.0.0.0`; `127.0.0.1` for local-only), `MAGPIE_URL` (https://gitee.com),
+`MAGPIE_NO_SANDBOX` (`1` only in Docker). Video/quality (all optional, additive —
+unset = current behavior): `MAGPIE_WIDTH`/`MAGPIE_HEIGHT` (1280/800),
+`MAGPIE_QUALITY` (80, jpeg 1-100), `MAGPIE_FPS` (10, drives both CDP `every` and
+`captureStream`), `MAGPIE_MAX_BITRATE` (adaptive default from viewport, ~2.5bps/px
+clamped [1.5M,8M]; `0`/`none`/`off` to disable; bps, accepts `2500k`/`2.5m`),
+`MAGPIE_MAX_FRAMERATE` (unset), `MAGPIE_DEGRADATION` (`maintain-resolution`;
+`maintain-resolution`/`maintain-framerate`/`balanced`). Video codec is
+auto-selected, not env-configurable: the client narrows its offer to the first
+codec in `[av1,vp9,vp8,h264]` that both magpie can encode and the client can
+decode (offerer-side, since the encoder follows the offer's m-line order).
 
 Docker:
 
@@ -72,11 +81,13 @@ an extension, this is why they're ruled out. Canonical design:
 | `src/browser/BrowserSession.js` | Target page: Playwright context+page+CDP session. `startScreencast/dispatchMouse/dispatchWheel/dispatchKey/navigate/getViewport/getUrl/onCrash/restart`. Accepts an injected shared browser. |
 | `src/browser/launch-options.js` | **Single source** for Chromium launch flags — both `index.js` (shared browser) and `BrowserSession` (self-launch) call it. `MAGPIE_NO_SANDBOX=1` → `--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage` (avoids the 64MB container `/dev/shm` crash). |
 | `src/streamer/StreamerPeer.js` | Manages the streamer page in the shared browser (separate context). `relayOffer(sdp)→answerSdp` via `page.evaluate(window.relayOffer)`; `pushFrame(jpeg)` over the `/internal` socket. |
-| `src/streamer/streamer.html` | canvas + `captureStream(15)` + page-side `RTCPeerConnection`; receives JPEG frames on `/internal`; sets `window.__ready=true` when ready. |
+| `src/streamer/streamer.html` | canvas + `captureStream(FPS)` (default 10, via `?fps=`) + page-side `RTCPeerConnection`; receives JPEG frames on `/internal`; applies sender caps from `?bitrate=&maxFps=&degradation=`. Codec selection happens client-side, not here. Sets `window.__ready=true`, exposes `window.__magpieCfg`. |
 | `src/webrtc/InputChannel.js` | Parses `/signaling` input msgs → maps coords → dispatches to BrowserSession. |
 | `src/webrtc/coords.js` | Pure: client `<video>` rect → page CSS coords (assumes no letterboxing; client video is `width:100%`). |
 | `src/webrtc/keys.js` | Pure: CDP key map (`key/code/windowsVirtualKeyCode/text`) + input-message parsing. |
 | `src/webrtc/ice-servers.js` | Builds STUN+TURN `iceServers` from a coturn host; returns `[]` when no host/creds (native run). |
+| `src/config.js` | Pure `loadConfig(env)` + `defaultBitrate`/`resolveMaxBitrate`: reads/validates `MAGPIE_*` video+quality env, never throws. Drives viewport, screencast opts, and WebRTC sender caps. |
+| `src/webrtc/codec-pick.js` | Pure `pickCodec(magpie, client, chain)`: first codec in `[av1,vp9,vp8,h264]` both sides support; used by the client to narrow the offer m-line. |
 | `src/public/client.html` | Client: `/signaling` WS + `RTCPeerConnection(recvonly)` + input capture. `?relay=1` forces `iceTransportPolicy:'relay'` (debug TURN). |
 
 ### Wiring notes (easy to get wrong)
@@ -90,6 +101,10 @@ an extension, this is why they're ruled out. Canonical design:
 - Client waits for `iceServers` in the `hello` message **before** starting the
   peer — the TURN allocation is a round-trip, so the offer must include the
   relay candidate.
+- WebRTC sender caps (`MAGPIE_MAX_BITRATE`/`MAGPIE_MAX_FRAMERATE`/
+  `MAGPIE_DEGRADATION`) apply **streamer-page-side** in `relayOffer` via
+  `RTCRtpSender.setParameters` — not on the (recvonly) client. They're threaded
+  as URL query params from `buildStreamerUrl`; the client peer is unaffected.
 
 ## Testing
 

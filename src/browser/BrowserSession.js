@@ -2,10 +2,11 @@ import { chromium } from "playwright";
 import { chromiumLaunchOptions } from "./launch-options.js";
 
 export class BrowserSession {
-  constructor({ url = "https://gitee.com", width = 1280, height = 800, browser } = {}) {
+  constructor({ url = "https://gitee.com", width = 1280, height = 800, browser, screencast = { quality: 80, every: 100 } } = {}) {
     this._url = url;
     this._width = width;
     this._height = height;
+    this._screencast = screencast;
     this._injectedBrowser = browser ?? null;
     this._browser = null;
     this._ownsBrowser = false;
@@ -82,7 +83,9 @@ export class BrowserSession {
       }
     });
     await this._cdp.send("Page.startScreencast", {
-      format: "jpeg", quality: 80, every: 100,
+      format: "jpeg",
+      quality: this._screencast.quality,
+      every: this._screencast.every,
       maxWidth: this._width, maxHeight: this._height,
     });
   }

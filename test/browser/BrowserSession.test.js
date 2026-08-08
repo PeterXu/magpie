@@ -37,3 +37,25 @@ test("BrowserSession: getViewport", () => {
   const session = new BrowserSession({ url: "about:blank", width: 500, height: 400 });
   assert.deepEqual(session.getViewport(), { width: 500, height: 400 });
 });
+
+test("BrowserSession: startScreencast forwards custom quality/every", async () => {
+  const session = new BrowserSession({ url: FIXTURE, width: 400, height: 300, screencast: { quality: 50, every: 40 } });
+  await session.start();
+  try {
+    const calls = [];
+    const orig = session._cdp.send.bind(session._cdp);
+    session._cdp.send = (method, params) => {
+      if (method === "Page.startScreencast") calls.push(params);
+      return orig(method, params);
+    };
+    await session.startScreencast(() => {});
+    await session.stopScreencast();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].quality, 50);
+    assert.equal(calls[0].every, 40);
+    assert.equal(calls[0].maxWidth, 400);
+    assert.equal(calls[0].maxHeight, 300);
+  } finally {
+    await session.stop();
+  }
+});
