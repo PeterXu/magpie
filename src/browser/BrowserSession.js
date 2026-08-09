@@ -23,6 +23,7 @@ export class BrowserSession {
     this._nextPageId = 1;
     this.onTabsChange = null;       // fires with { pages, activeId }
     this._resolveNewPageId = null;  // resolver for newPage() to wait for registration
+    this._newPageInProgress = false; // lock to prevent concurrent newPage() calls
     this._crashFired = false;
     this._onPageCrash = null;
     this._onBrowserDisconnect = null;
@@ -73,11 +74,17 @@ export class BrowserSession {
     const onFrame = (frame) => {
       if (frame !== page.mainFrame()) return;
       entry.url = page.url();
+
       // Update title on navigation (more reliable than titlechanged event)
+      let titleChanged = false;
       page.title().then(t => {
         if (t && t !== entry.title) {
           entry.title = t;
-          this._fireTabsChange();
+          titleChanged = true;
+          // Only fire if not active (active page fires below anyway)
+          if (pageId !== this._activePageId) {
+            this._fireTabsChange();
+          }
         }
       }).catch(() => {});
 
@@ -159,15 +166,21 @@ export class BrowserSession {
   // Public: open a new about:blank tab. The context.on('page') handler
   // will capture it and auto-switch to the new tab.
   async newPage() {
-    // Create a promise to wait for the new page registration
-    let resolveNewId;
-    const newIdPromise = new Promise(r => { resolveNewId = r; });
+    // Prevent concurrent calls (race condition protection)
+    if (this._newPageInProgress) {
+      return; // Ignore if already creating a new page
+    }
 
-    // Temporarily set a resolver that will be called when the next page registers
-    const prevResolver = this._resolveNewPageId;
-    this._resolveNewPageId = resolveNewId;
+    this._newPageInProgress = true;
 
     try {
+      // Create a promise to wait for the new page registration
+      let resolveNewId;
+      const newIdPromise = new Promise(r => { resolveNewId = r; });
+
+      // Set resolver that will be called when the page registers
+      this._resolveNewPageId = resolveNewId;
+
       const page = await this._context.newPage();
       await page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
 
@@ -177,7 +190,8 @@ export class BrowserSession {
       // Switch to the new tab
       await this.switchPage(pageId);
     } finally {
-      this._resolveNewPageId = prevResolver;
+      this._newPageInProgress = false;
+      this._resolveNewPageId = null; // Always clear resolver
     }
   }
 
