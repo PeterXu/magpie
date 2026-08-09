@@ -8,6 +8,10 @@ function startWithMocks() {
     getViewport: () => ({ width: 1280, height: 800 }),
     getUrl: () => "https://gitee.com",
     navigate: async (url) => { browserSession._lastNav = url; },
+    goBack: async () => { browserSession._back = (browserSession._back || 0) + 1; },
+    goForward: async () => { browserSession._fwd = (browserSession._fwd || 0) + 1; },
+    reload: async () => { browserSession._reload = (browserSession._reload || 0) + 1; },
+    getNavState: async () => ({ url: "https://gitee.com", canBack: true, canForward: false }),
     _lastNav: null,
   };
   const inputChannel = { handle: () => {} };
@@ -34,7 +38,7 @@ test("server: GET / serves client.html with a <video>", async () => {
   } finally { server.close(); }
 });
 
-test("server: signaling handles offer/navigate/status", async () => {
+test("server: signaling handles offer/navigate/back/forward/refresh; hello carries nav state", async () => {
   const { server, port, browserSession } = await startWithMocks();
   const ws = new WebSocket(`ws://127.0.0.1:${port}/signaling`, { perMessageDeflate: false });
   const received = [];
@@ -43,14 +47,25 @@ test("server: signaling handles offer/navigate/status", async () => {
   try {
     ws.send(JSON.stringify({ t: "offer", sdp: "v=0" }));
     ws.send(JSON.stringify({ t: "navigate", url: "https://example.com" }));
+    ws.send(JSON.stringify({ t: "back" }));
+    ws.send(JSON.stringify({ t: "forward" }));
+    ws.send(JSON.stringify({ t: "refresh" }));
     ws.send(JSON.stringify({ t: "status" }));
     await new Promise((r) => setTimeout(r, 300));
     const types = received.map((m) => m.t);
-    assert.ok(types.includes("hello"));
+    const hello = received.find((m) => m.t === "hello");
+    assert.ok(hello, "expected hello");
+    assert.equal(hello.canBack, true);
+    assert.equal(hello.canForward, false);
     assert.ok(types.includes("answer"));
     assert.equal(received.find((m) => m.t === "answer").sdp, "ANSWER-FROM-MOCK");
-    assert.ok(types.includes("navigate-result"));
     assert.equal(browserSession._lastNav, "https://example.com");
+    assert.equal(browserSession._back, 1);
+    assert.equal(browserSession._fwd, 1);
+    assert.equal(browserSession._reload, 1);
+    // navigate-result was removed: nav state is broadcast via framenavigated
+    // (wired in index.js), not echoed by the navigate handler.
+    assert.ok(!types.includes("navigate-result"), "navigate-result should be gone");
     assert.ok(types.includes("status"));
   } finally {
     ws.close();

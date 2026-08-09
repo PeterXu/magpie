@@ -4,42 +4,77 @@
   <meta charset="utf-8" />
   <title>magpie</title>
   <style>
-    html, body { margin: 0; background: #111; }
-    #v { width: 100vw; height: auto; display: block; cursor: url("/cursor.svg") 2 2, default; }
+    html, body { margin: 0; height: 100%; background: #111; }
+    body { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+           font: 13px sans-serif; }
+    /* Browser-style chrome: full-width toolbar on top, video body below.
+       body is a flex column; #bar takes its natural height, #stage fills the
+       rest. #v scales to fit #stage preserving aspect, so its element box
+       equals its content box (no in-element letterboxing) — keeping the
+       no-letterbox assumption in coords.js / mapClientToPage valid. */
+    #bar { flex: 0 0 auto; display: flex; gap: 6px; align-items: center;
+           background: #222; color: #eee; padding: 6px 8px; border-bottom: 1px solid #000; }
+    #bar button { background: #333; color: #eee; border: 1px solid #444;
+                 border-radius: 4px; padding: 4px 9px; cursor: pointer;
+                 font-size: 14px; line-height: 1; }
+    #bar button:hover:not(:disabled) { background: #444; }
+    #bar button:disabled { opacity: 0.35; cursor: default; }
+    #url { flex: 1 1 auto; min-width: 0; background: #111; color: #eee;
+           border: 1px solid #444; border-radius: 4px; padding: 5px 8px;
+           font: 13px sans-serif; }
+    #stage { flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+             overflow: hidden; }
+    #v { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block;
+         cursor: url("/cursor.svg") 2 2, default; }
     /* cursor.svg: teal arrow + dot — distinct from the macOS/Windows default
        arrows and an instant cue that the pointer is over the remote video.
        hotspot (2,2) = arrow tip; `default` is just a load-failure fallback. */
-    #bar { position: fixed; top: 0; right: 0; background: #222; color: #eee;
-           padding: 6px; display: flex; gap: 6px; font: 13px sans-serif; }
-    #url { width: 320px; }
   </style>
 </head>
 <body>
-  <video id="v" autoplay playsinline muted></video>
   <div id="bar">
+    <button id="back" title="Back" aria-label="Back" disabled>◀</button>
+    <button id="fwd" title="Forward" aria-label="Forward" disabled>▶</button>
+    <button id="refresh" title="Reload" aria-label="Reload">⟳</button>
     <input id="url" placeholder="https://..." />
     <button id="go">Go</button>
+  </div>
+  <div id="stage">
+    <video id="v" autoplay playsinline muted></video>
   </div>
   <script type="module">
     import { pickCodec } from "/codec-pick.js";
     const video = document.getElementById("v");
     const urlInput = document.getElementById("url");
     const goBtn = document.getElementById("go");
+    const backBtn = document.getElementById("back");
+    const fwdBtn = document.getElementById("fwd");
+    const refreshBtn = document.getElementById("refresh");
     let pc = null;
+
+    // Server-reported nav state → URL bar + back/forward disabled state.
+    // Always applied (even while editing): right after Go the resolved URL
+    // (after redirect) should replace the typed text; a passive nav clobbering
+    // a half-typed draft is rare and harmless.
+    function applyNav(nav) {
+      if (nav && typeof nav.url === "string") urlInput.value = nav.url;
+      backBtn.disabled = !nav || !nav.canBack;
+      fwdBtn.disabled = !nav || !nav.canForward;
+    }
 
     function connect() {
       const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/signaling");
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.t === "hello") {
-          urlInput.value = msg.url;
+          applyNav({ url: msg.url, canBack: msg.canBack, canForward: msg.canForward });
           window._iceServers = msg.iceServers || [];
           window._magpieCodecs = msg.magpieCodecs || [];
           if (!pc) startPeer();                 // start AFTER we have iceServers + magpieCodecs
         }
+        else if (msg.t === "nav") applyNav(msg);  // URL + button state after any navigation
         else if (msg.t === "answer") pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }).then(attachReceiver);
-        else if (msg.t === "navigate-result" && msg.url) urlInput.value = msg.url;
-        else if (msg.t === "reload") location.reload();
+        else if (msg.t === "reload") location.reload();  // crash recovery: reload the CLIENT page
       };
       ws.onclose = () => setTimeout(connect, 1000);
       window._ws = ws;
@@ -114,8 +149,13 @@
     window.addEventListener("keydown", (e) => send({ t: "key", type: "keyDown", key: e.key, code: e.code, keyCode: e.keyCode, modifiers: 0 }));
     window.addEventListener("keyup", (e) => send({ t: "key", type: "keyUp", key: e.key, code: e.code, keyCode: e.keyCode, modifiers: 0 }));
 
+    // Toolbar → server. "refresh" reloads the REMOTE page (the crash-recovery
+    // "reload" broadcast up above reloads the CLIENT page — different directions).
     goBtn.addEventListener("click", () => send({ t: "navigate", url: urlInput.value }));
     urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") goBtn.click(); });
+    backBtn.addEventListener("click", () => send({ t: "back" }));
+    fwdBtn.addEventListener("click", () => send({ t: "forward" }));
+    refreshBtn.addEventListener("click", () => send({ t: "refresh" }));
 
     connect();
   </script>

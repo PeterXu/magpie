@@ -58,6 +58,11 @@ async function main() {
   // Pump screencast frames into the streamer page.
   await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
 
+  // URL-bar sync: every main-frame navigation in the remote page (Go,
+  // back/forward/reload, or a passive link-click) broadcasts the new nav state
+  // to all clients. See the BrowserSession framenavigated listener.
+  browserSession.onUrlChange = (nav) => server.broadcast({ t: "nav", ...nav });
+
   browserSession.onCrash = async () => {
     try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
     server.broadcast({ t: "reload" });

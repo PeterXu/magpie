@@ -60,8 +60,6 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
       }
     };
 
-    send({ t: "hello", viewport: browserSession.getViewport(), url: browserSession.getUrl(), iceServers: clientIceServers, magpieCodecs: streamerPeer.getSenderCodecs() });
-
     ws.on("message", async (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -71,7 +69,18 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
           send({ t: "answer", sdp });
         } else if (msg.t === "navigate") {
           await browserSession.navigate(msg.url);
-          send({ t: "navigate-result", ok: true, url: browserSession.getUrl() });
+          // No direct response: the resulting navigation fires framenavigated,
+          // which broadcasts {t:"nav",url,canBack,canForward} to every client
+          // (wired in index.js). The same path covers back/forward/reload and
+          // passive link-clicks inside the remote page.
+        } else if (msg.t === "back") {
+          await browserSession.goBack();
+        } else if (msg.t === "forward") {
+          await browserSession.goForward();
+        } else if (msg.t === "refresh") {
+          // "refresh" (not "reload"): the crash-recovery broadcast {t:"reload"}
+          // means "reload the CLIENT page" — this is "reload the REMOTE page".
+          await browserSession.reload();
         } else if (msg.t === "status") {
           send({ t: "status", viewport: browserSession.getViewport(), url: browserSession.getUrl() });
         } else if (msg.t === "mouse" || msg.t === "wheel" || msg.t === "key") {
@@ -81,6 +90,14 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
         send({ t: "error", error: String((err && err.message) || err) });
       }
     });
+
+    // hello carries the initial nav state (url + canBack/canForward) so the
+    // toolbar buttons start correct. getNavState is async (CDP history); the
+    // message handler above is already registered, so no early send is lost.
+    void (async () => {
+      const nav = await browserSession.getNavState();
+      send({ t: "hello", viewport: browserSession.getViewport(), url: nav.url, canBack: nav.canBack, canForward: nav.canForward, iceServers: clientIceServers, magpieCodecs: streamerPeer.getSenderCodecs() });
+    })();
   });
 
   server.broadcast = (obj) => {
