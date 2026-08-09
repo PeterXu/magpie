@@ -32,6 +32,12 @@ export class InputChannel {
       await this._bs.dispatchWheel({ x, y, deltaX: event.deltaX, deltaY: event.deltaY });
     } else if (event.kind === "key") {
       await this._bs.dispatchKey({ type: event.type, mapKey: event.mapKey, modifiers: event.modifiers });
+    } else if (event.kind === "paste") {
+      console.log('[InputChannel] Received paste message:', event.text ? `${event.text.length} chars` : 'empty');
+      await this._bs.insertText(event.text);
+    } else if (event.kind === "copy") {
+      console.log('[InputChannel] Received copy message, cut:', event.cut);
+      await this._bs.handleCopy(event.cut);
     }
   }
 }

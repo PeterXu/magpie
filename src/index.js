@@ -67,6 +67,11 @@ async function main() {
   // titles change. Clients render the tab bar from this.
   browserSession.onTabsChange = (state) => server.broadcast({ t: "tabs", ...state });
 
+  // Handle clipboard changes from remote browser
+  browserSession.onClipboardChange = (data) => {
+    server.broadcast({ t: "clipboard", text: data.text });
+  };
+
   browserSession.onCrash = async () => {
     try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
     server.broadcast({ t: "reload" });

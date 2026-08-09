@@ -613,7 +613,7 @@
 
     function connect() {
       const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/signaling");
-      ws.onmessage = (e) => {
+      ws.onmessage = async (e) => {
         const msg = JSON.parse(e.data);
         if (msg.t === "hello") {
           applyNav({ url: msg.url, canBack: msg.canBack, canForward: msg.canForward });
@@ -624,6 +624,13 @@
         }
         else if (msg.t === "nav") applyNav(msg);  // URL + button state after any navigation
         else if (msg.t === "tabs") renderTabs(msg);
+        else if (msg.t === "clipboard") {
+          try {
+            navigator.clipboard.writeText(msg.text);
+          } catch (err) {
+            console.error('Failed to write clipboard:', err);
+          }
+        }
         else if (msg.t === "answer") pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }).then(attachReceiver);
         else if (msg.t === "reload") location.reload();  // crash recovery: reload the CLIENT page
       };
@@ -765,8 +772,81 @@
     video.addEventListener("mouseup", (e) => send({ t: "mouse", ...coords(e), type: "released", button: btn(e.button), clickCount: 1 }));
     video.addEventListener("wheel", (e) => { e.preventDefault(); send({ t: "wheel", ...coords(e), deltaX: e.deltaX, deltaY: e.deltaY }); });
     video.addEventListener("contextmenu", (e) => e.preventDefault());
-    window.addEventListener("keydown", (e) => send({ t: "key", type: "keyDown", key: e.key, code: e.code, keyCode: e.keyCode, modifiers: 0 }));
-    window.addEventListener("keyup", (e) => send({ t: "key", type: "keyUp", key: e.key, code: e.code, keyCode: e.keyCode, modifiers: 0 }));
+
+    // Modifier key bitmask calculation (Alt=1, Ctrl=2, Meta=4, Shift=8)
+    function getModifiers(e) {
+      return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+    }
+
+    // Detect if key event is a clipboard shortcut
+    function isClipboardShortcut(e) {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const mainKey = isMac ? e.metaKey : e.ctrlKey;
+      return mainKey && ['c', 'v', 'x', 'a'].includes(e.key.toLowerCase());
+    }
+
+    // Request clipboard read permission
+    async function requestClipboardPermission() {
+      try {
+        const permission = await navigator.permissions.query({ name: 'clipboard-read' });
+        if (permission.state === 'granted' || permission.state === 'prompt') {
+          return true;
+        }
+        return false;
+      } catch {
+        // API not supported, try anyway
+        return true;
+      }
+    }
+
+    // Handle clipboard shortcuts
+    async function handleClipboardShortcut(e) {
+      const key = e.key.toLowerCase();
+      console.log('[Clipboard] Key pressed:', key, 'Platform:', navigator.platform, 'Meta:', e.metaKey, 'Ctrl:', e.ctrlKey);
+
+      if (key === 'v') {
+        // Paste: read local clipboard
+        if (!await requestClipboardPermission()) {
+          console.warn('[Clipboard] Permission denied');
+          return;
+        }
+
+        try {
+          const text = await navigator.clipboard.readText();
+          console.log('[Clipboard] Read from clipboard:', text ? `${text.length} chars` : 'empty');
+          if (text) {
+            send({ t: "paste", text });
+            console.log('[Clipboard] Sent paste message to server');
+          }
+        } catch (err) {
+          console.error('[Clipboard] Read failed:', err);
+        }
+      } else if (key === 'c' || key === 'x') {
+        // Copy/Cut: request remote read
+        send({ t: "copy", cut: key === 'x' });
+      } else if (key === 'a') {
+        // Select all: pass through with correct modifiers
+        send({ t: "key", type: "keyDown", key: e.key, code: e.code,
+               keyCode: e.keyCode, modifiers: getModifiers(e) });
+      }
+    }
+
+    window.addEventListener("keydown", (e) => {
+      // Intercept clipboard shortcuts
+      if (isClipboardShortcut(e)) {
+        e.preventDefault();
+        handleClipboardShortcut(e);
+        return;
+      }
+
+      // Normal key event with correct modifiers
+      send({ t: "key", type: "keyDown", key: e.key, code: e.code,
+             keyCode: e.keyCode, modifiers: getModifiers(e) });
+    });
+    window.addEventListener("keyup", (e) => {
+      send({ t: "key", type: "keyUp", key: e.key, code: e.code,
+             keyCode: e.keyCode, modifiers: getModifiers(e) });
+    });
 
     // Toolbar → server. "refresh" reloads the REMOTE page (the crash-recovery
     // "reload" broadcast up above reloads the CLIENT page — different directions).

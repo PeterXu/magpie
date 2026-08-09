@@ -28,6 +28,7 @@ export class BrowserSession {
     this._onPageCrash = null;
     this._onBrowserDisconnect = null;
     this._onFrameNavigated = null;
+    this.onClipboardChange = null;  // fires with {text} on remote clipboard read
   }
 
   // Backward-compatible getters for tests and external code.
@@ -423,6 +424,72 @@ export class BrowserSession {
     });
     if (mapKey.text && type === "keyDown") {
       await entry.cdp.send("Input.dispatchKeyEvent", { type: "char", text: mapKey.text, modifiers });
+    }
+  }
+
+  // Clipboard operations: insert text into remote browser, read clipboard on copy/cut
+  async insertText(text) {
+    const entry = this._pages.get(this._activePageId);
+    if (!entry) {
+      console.log('[BrowserSession] insertText: no active page');
+      return;
+    }
+
+    // Limit text length (prevent oversized content)
+    const maxLength = 100000; // 100KB
+    const safeText = text.substring(0, maxLength);
+
+    console.log('[BrowserSession] insertText: inserting', safeText.length, 'chars into page', this._activePageId);
+
+    try {
+      await entry.cdp.send("Input.insertText", { text: safeText });
+      console.log('[BrowserSession] insertText: success');
+    } catch (err) {
+      console.error('[BrowserSession] CDP insertText failed:', err);
+      // Fallback: send char by char
+      await this._fallbackInsertText(entry, safeText);
+    }
+  }
+
+  async _fallbackInsertText(entry, text) {
+    for (const char of text) {
+      await entry.cdp.send("Input.dispatchKeyEvent", {
+        type: "char",
+        text: char
+      });
+    }
+  }
+
+  async handleCopy(cut = false) {
+    const entry = this._pages.get(this._activePageId);
+    if (!entry) return;
+
+    // Send Ctrl/Command+C or X
+    const isMac = process.platform === 'darwin';
+    const modifiers = isMac ? 4 : 2;
+
+    await entry.cdp.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: cut ? 'x' : 'c',
+      code: cut ? 'KeyX' : 'KeyC',
+      modifiers: modifiers
+    });
+
+    // Wait for browser to process
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Read remote clipboard
+    try {
+      const result = await entry.cdp.send("Runtime.evaluate", {
+        expression: "navigator.clipboard.readText()",
+        awaitPromise: true
+      });
+
+      if (result.result && result.result.value && this.onClipboardChange) {
+        this.onClipboardChange({ text: result.result.value });
+      }
+    } catch (err) {
+      console.error('Failed to read remote clipboard:', err);
     }
   }
 }

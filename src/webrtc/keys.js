@@ -39,6 +39,16 @@ export function parseInputMessage(raw) {
         keyCode: Number(msg.keyCode ?? 0), modifiers: Number(msg.modifiers ?? 0),
         mapKey: mapKey({ key: msg.key, code: msg.code, keyCode: msg.keyCode }),
       };
+    case "paste":
+      return {
+        kind: "paste",
+        text: String(msg.text ?? ""),
+      };
+    case "copy":
+      return {
+        kind: "copy",
+        cut: Boolean(msg.cut ?? false),
+      };
     default:
       throw new Error(`unknown input message type: ${msg.t}`);
   }

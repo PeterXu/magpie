@@ -89,7 +89,7 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
           await browserSession.newPage();
         } else if (msg.t === "status") {
           send({ t: "status", viewport: browserSession.getViewport(), url: browserSession.getUrl() });
-        } else if (msg.t === "mouse" || msg.t === "wheel" || msg.t === "key") {
+        } else if (msg.t === "mouse" || msg.t === "wheel" || msg.t === "key" || msg.t === "paste" || msg.t === "copy") {
           await inputChannel.handle(raw.toString());
         }
       } catch (err) {

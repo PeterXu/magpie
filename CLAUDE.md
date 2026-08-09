@@ -9,7 +9,7 @@ Mouse / keyboard / navigation round-trip back over a signaling WebSocket.
 **Session model: single-instance, single-user, multi-tab.** One Chromium instance
 with multiple tabs, one active tab streamed at a time via WebRTC. Users can switch
 between tabs, open new tabs, and close tabs via the tab bar UI. v1 has no
-multi-session, no auth, no audio, no clipboard, no runtime resize.
+multi-session, no auth, no audio, no runtime resize.
 
 ## Commands
 
@@ -188,6 +188,27 @@ up in a `finally`.
 - Purple accent color (#5a57c4, matching lyrebird)
 - 44px header height (standard Material Design)
 - Shadows and hover effects for interactivity
+
+## Clipboard support implementation
+
+**Clipboard shortcuts**:
+- Copy (Ctrl/Command+C): Reads remote clipboard and syncs to local
+- Paste (Ctrl/Command+V): Reads local clipboard and inserts to remote
+- Cut (Ctrl/Command+X): Reads remote clipboard (with cut operation) and syncs to local
+- Select all (Ctrl/Command+A): Passes through to remote browser
+
+**Technical flow**:
+- Client intercepts clipboard shortcuts before they reach the browser
+- `getModifiers(e)` calculates correct modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8)
+- Paste: Read local clipboard via `navigator.clipboard.readText()`, send `{t:"paste", text:"..."}` to server
+- Copy: Send `{t:"copy", cut:boolean}` to server, server reads remote clipboard via CDP, sends `{t:"clipboard", text:"..."}` back
+- Server uses `Input.insertText` CDP API for pasting, `Runtime.evaluate` for reading remote clipboard
+
+**Security considerations**:
+- Requires clipboard-read permission on client
+- Text length limited to 100KB on server
+- HTTPS required for clipboard API in production
+- Graceful degradation if clipboard API unavailable
 
 ## Code conventions
 
