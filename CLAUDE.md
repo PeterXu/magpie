@@ -95,7 +95,7 @@ an extension, this is why they're ruled out. Canonical design:
 | `src/webrtc/ice-servers.js` | Builds STUN+TURN `iceServers` from a coturn host; returns `[]` when no host/creds (native run). |
 | `src/config.js` | Pure `loadConfig(env)` + `defaultBitrate`/`resolveMaxBitrate`: reads/validates `MAGPIE_*` video+quality env, never throws. Drives viewport, screencast opts, and WebRTC sender caps. |
 | `src/webrtc/codec-pick.js` | Pure `pickCodec(magpie, client, chain)`: first codec in `[av1,vp9,vp8,h264]` both sides support; used by the client to narrow the offer m-line. |
-| `src/public/client.html` | Client: `/signaling` WS + `RTCPeerConnection(recvonly)` + input capture. Tab bar UI rendered from `hello` and `tabs` messages. `?relay=1` forces `iceTransportPolicy:'relay'` (debug TURN). |
+| `src/public/client.html` | Client: `/signaling` WS + `RTCPeerConnection(recvonly)` + input capture. **UI Features:** Left navigation panel with "项目介绍" and "远程访问浏览器"; Manual connection control ("连接远程"/"停止远程" buttons); Connection status indicator (green/gray dot); lyrebird-inspired light theme. Tab bar UI rendered from `hello` and `tabs` messages. `?relay=1` forces `iceTransportPolicy:'relay'` (debug TURN). |
 
 ### Wiring notes (easy to get wrong)
 
@@ -158,6 +158,37 @@ up in a `finally`.
 - New tab: `Page.startScreencast`, wire frame handlers
 - Automatic on tab switch and close
 
+## Client UI implementation
+
+**Left navigation panel**:
+- Position: fixed, 200px width, white background
+- Logo area: 44px height with "magpie" text
+- Navigation items: "📋 项目介绍" and "🌐 远程访问浏览器"
+- Active state: Purple left border (#5a57c4), semi-transparent background
+
+**Panel switching**:
+- Intro panel: Welcome page with feature cards (remote browser, multi-tab, session persistence, lightweight deployment)
+- WebRTC panel: Remote browser control interface
+- State preservation: Switching panels does NOT disconnect WebSocket/WebRTC
+
+**Connection control**:
+- Manual connection: "连接远程" button to establish connection
+- Manual disconnect: "停止远程" button to close connection
+- Connection status: Green dot (connected) / Gray dot (disconnected)
+- State management: `isConnected` flag controls auto-reconnect on WebSocket close
+
+**WebRTC lifecycle**:
+- Default: No connection on page load
+- Connect: Creates WebSocket → receives hello → starts RTCPeerConnection
+- Disconnect: Thoroughly cleans up event listeners, closes connections, clears caches
+- Reconnect: Safe after disconnect due to proper cleanup (fixes connect→disconnect→reconnect failure)
+
+**Design inspiration**:
+- Light theme (#f8f9fa background)
+- Purple accent color (#5a57c4, matching lyrebird)
+- 44px header height (standard Material Design)
+- Shadows and hover effects for interactivity
+
 ## Code conventions
 
 - ESM (`"type":"module"`), explicit `.js` extensions in imports, **no build
@@ -202,3 +233,12 @@ up in a `finally`.
 - This project follows the `superpowers` workflow (brainstorm → spec → plan →
   implement). New features should get a spec + plan in `docs/superpowers/`
   before code.
+
+## Reference implementations
+
+The `lyrebird` and `mitmproxy` to reference projects for planned features:
+
+- **lyrebird**: HTTP API recording and traffic inspection (inspired UI design)
+- **mitmproxy**: Traffic interception and manipulation
+
+These are development references only, not part of the magpie runtime.
