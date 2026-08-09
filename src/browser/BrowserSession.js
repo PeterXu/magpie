@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import { chromiumLaunchOptions } from "./launch-options.js";
+import { BLANK_HTML } from "./blank-page.js";
 
 export class BrowserSession {
   constructor({ url = "about:blank", width = 1280, height = 800, browser, screencast = { quality: 80 } } = {}) {
@@ -21,6 +22,7 @@ export class BrowserSession {
     this._activePageId = null;
     this._nextPageId = 1;
     this.onTabsChange = null;       // fires with { pages, activeId }
+    this._resolveNewPageId = null;  // resolver for newPage() to wait for registration
     this._crashFired = false;
     this._onPageCrash = null;
     this._onBrowserDisconnect = null;
@@ -71,10 +73,18 @@ export class BrowserSession {
     const onFrame = (frame) => {
       if (frame !== page.mainFrame()) return;
       entry.url = page.url();
-      // Only fire onTabsChange if this is the active page (URL bar + tabs need update)
+      // Update title on navigation (more reliable than titlechanged event)
+      page.title().then(t => {
+        if (t && t !== entry.title) {
+          entry.title = t;
+          this._fireTabsChange();
+        }
+      }).catch(() => {});
+
+      // If this is the active page, fire navigation updates
       if (pageId === this._activePageId) {
         this._fireTabsChange();
-        // Fire onUrlChange for URL bar sync (covers navigate, back/forward, reload, and passive navigations)
+        // Fire onUrlChange for URL bar sync
         if (this.onUrlChange) {
           void (async () => {
             const nav = await this.getNavState();
@@ -147,11 +157,28 @@ export class BrowserSession {
   }
 
   // Public: open a new about:blank tab. The context.on('page') handler
-  // will capture it; we don't auto-switch.
+  // will capture it and auto-switch to the new tab.
   async newPage() {
-    const page = await this._context.newPage();
-    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
-    // context.on('page') fires and calls _registerPage
+    // Create a promise to wait for the new page registration
+    let resolveNewId;
+    const newIdPromise = new Promise(r => { resolveNewId = r; });
+
+    // Temporarily set a resolver that will be called when the next page registers
+    const prevResolver = this._resolveNewPageId;
+    this._resolveNewPageId = resolveNewId;
+
+    try {
+      const page = await this._context.newPage();
+      await page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
+
+      // Wait for _registerPage to complete and resolve the promise
+      const pageId = await newIdPromise;
+
+      // Switch to the new tab
+      await this.switchPage(pageId);
+    } finally {
+      this._resolveNewPageId = prevResolver;
+    }
   }
 
   _onPageClose(pageId) {
@@ -163,8 +190,9 @@ export class BrowserSession {
     if (pageId === this._activePageId) {
       const remaining = [...this._pages.keys()];
       if (remaining.length > 0) {
-        // Switch to the first remaining tab (async, errors ignored)
-        this._switchTo(remaining[0]).catch(() => {});
+        // Switch to the last remaining tab (most recent before this one)
+        // and broadcast the URL change
+        this.switchPage(remaining[remaining.length - 1]).catch(() => {});
       } else {
         // Last tab closed: create a new blank tab (Chrome behavior)
         this._createBlankPage().catch(() => {});
@@ -174,10 +202,10 @@ export class BrowserSession {
   }
 
   async _createBlankPage() {
-    // Called when the last tab is closed. Opens about:blank.
+    // Called when the last tab is closed. Opens a blank page with magpie watermark.
     // The new page will be captured by context.on('page').
     const page = await this._context.newPage();
-    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+    await page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
     // _registerPage is called by context.on('page'), not here.
   }
 
@@ -225,6 +253,10 @@ export class BrowserSession {
         } else if (this._pages.size === 1 && !this._pages.has(this._activePageId)) {
           // Last tab closed, new blank page created - make it active
           this._activePageId = id;
+        } else if (this._resolveNewPageId) {
+          // User-initiated newPage() - resolve the promise and auto-switch
+          this._resolveNewPageId(id);
+          this._resolveNewPageId = null;
         }
       });
     });
@@ -232,7 +264,12 @@ export class BrowserSession {
     // Create the initial page. The event handler above will register it.
     await this._context.newPage();
     await initialIdPromise;  // Wait for registration to complete
-    await this._page.goto(this._url, { waitUntil: "domcontentloaded" });
+    // Use BLANK_HTML for about:blank, otherwise navigate to URL
+    if (this._url === "about:blank") {
+      await this._page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
+    } else {
+      await this._page.goto(this._url, { waitUntil: "domcontentloaded" });
+    }
 
     // Crash handling for browser disconnect (page crash handled in _registerPage)
     this._onBrowserDisconnect = () => this._handleCrash();
@@ -269,7 +306,13 @@ export class BrowserSession {
     }
     this._url = url;
     const entry = this._pages.get(this._activePageId);
-    if (entry) await entry.page.goto(url, { waitUntil: "domcontentloaded" });
+    if (!entry) return;
+    // Use BLANK_HTML for about:blank, otherwise navigate
+    if (url === "about:blank") {
+      await entry.page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
+    } else {
+      await entry.page.goto(url, { waitUntil: "domcontentloaded" });
+    }
   }
 
   // History navigation. Playwright resolves null (no throw) when there's nothing
