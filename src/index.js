@@ -6,7 +6,12 @@ import { InputChannel } from "./webrtc/InputChannel.js";
 import { createServer } from "./server.js";
 import { buildIceServers } from "./webrtc/ice-servers.js";
 import { loadConfig } from "./config.js";
+import { loadEnvFile } from "./env.js";
 import { fileURLToPath } from "node:url";
+
+// Populate process.env from .env (cwd) before any env is read. Real/shell env
+// wins over the file. Dependency-free — see src/env.js.
+loadEnvFile();
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "0.0.0.0";

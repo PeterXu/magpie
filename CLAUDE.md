@@ -19,7 +19,9 @@ npm start                         # node src/index.js -> http://localhost:8080/
 npm test                          # node --test (unit + integration + spike + e2e)
 ```
 
-Env (defaults in `src/index.js` + `src/config.js`): `PORT` (8080), `HOST`
+Env: `src/env.js` auto-loads a `.env` file from the cwd at startup (real/shell
+env wins over the file; no new dep — the project stays at two). `.env.example`
+is the template. Defaults in `src/index.js` + `src/config.js`: `PORT` (8080), `HOST`
 (`0.0.0.0`; `127.0.0.1` for local-only), `MAGPIE_URL` (https://gitee.com),
 `MAGPIE_NO_SANDBOX` (`1` only in Docker). Video/quality (all optional, additive —
 unset = current behavior): `MAGPIE_WIDTH`/`MAGPIE_HEIGHT` (1280/800),
@@ -143,6 +145,12 @@ up in a `finally`.
 
 - `shm_size: 2gb` is required for Chromium stability (the default 64MB
   `/dev/shm` crashes it).
+- `docker compose` auto-loads the host `.env` into the magpie container
+  (`env_file` with `required:false` — no error if `.env` is absent). The
+  `environment:` block still wins, so Docker-essential values
+  (`MAGPIE_NO_SANDBOX=1`, `HOST`, `PORT`) stay fixed; everything else
+  (video/quality, `MAGPIE_HOST_IP`) comes from `.env`. Native (`npm start`)
+  loads `.env` via `src/env.js` instead.
 - **macOS Docker Desktop**: the page loads and signaling works, but WebRTC
   video will NOT reach a Mac browser — container ICE candidates live in the
   Docker VM, unroutable from macOS. Verify the pipeline from the CLI with

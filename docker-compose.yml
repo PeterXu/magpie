@@ -8,6 +8,13 @@ services:
     ports:
       - "8080:8080"
     shm_size: 2gb            # Chromium stability (default 64MB /dev/shm can crash)
+    # Auto-load the host .env into the container environment (every MAGPIE_*
+    # video/quality var + MAGPIE_HOST_IP, etc.). required:false means no error
+    # when .env is absent. `environment:` below still takes precedence, so the
+    # Docker-essential values (NO_SANDBOX, HOST, PORT) stay fixed.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - MAGPIE_URL=https://gitee.com
       - MAGPIE_NO_SANDBOX=1
