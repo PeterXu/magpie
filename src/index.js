@@ -63,6 +63,10 @@ async function main() {
   // to all clients. See the BrowserSession framenavigated listener.
   browserSession.onUrlChange = (nav) => server.broadcast({ t: "nav", ...nav });
 
+  // Tab state broadcast: fire whenever pages are opened/closed/switched or
+  // titles change. Clients render the tab bar from this.
+  browserSession.onTabsChange = (state) => server.broadcast({ t: "tabs", ...state });
+
   browserSession.onCrash = async () => {
     try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
     server.broadcast({ t: "reload" });

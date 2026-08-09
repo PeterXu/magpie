@@ -12,6 +12,10 @@ function startWithMocks() {
     goForward: async () => { browserSession._fwd = (browserSession._fwd || 0) + 1; },
     reload: async () => { browserSession._reload = (browserSession._reload || 0) + 1; },
     getNavState: async () => ({ url: "https://gitee.com", canBack: true, canForward: false }),
+    getTabsState: () => ({ pages: [{ id: "page-1", url: "https://gitee.com", title: "Gitee", active: true }], activeId: "page-1" }),
+    switchPage: async (id) => { browserSession._switched = id; },
+    closePage: async (id) => { browserSession._closed = id; },
+    newPage: async () => { browserSession._newed = (browserSession._newed || 0) + 1; },
     _lastNav: null,
   };
   const inputChannel = { handle: () => {} };
@@ -51,6 +55,9 @@ test("server: signaling handles offer/navigate/back/forward/refresh; hello carri
     ws.send(JSON.stringify({ t: "forward" }));
     ws.send(JSON.stringify({ t: "refresh" }));
     ws.send(JSON.stringify({ t: "status" }));
+    ws.send(JSON.stringify({ t: "switch-tab", id: 1 }));
+    ws.send(JSON.stringify({ t: "close-tab", id: 2 }));
+    ws.send(JSON.stringify({ t: "new-tab" }));
     await new Promise((r) => setTimeout(r, 300));
     const types = received.map((m) => m.t);
     const hello = received.find((m) => m.t === "hello");
@@ -67,6 +74,10 @@ test("server: signaling handles offer/navigate/back/forward/refresh; hello carri
     // (wired in index.js), not echoed by the navigate handler.
     assert.ok(!types.includes("navigate-result"), "navigate-result should be gone");
     assert.ok(types.includes("status"));
+    assert.equal(browserSession._switched, 1);
+    assert.equal(browserSession._closed, 2);
+    assert.equal(browserSession._newed, 1);
+    assert.ok(hello.pages, "hello should include pages");
   } finally {
     ws.close();
     server.close();

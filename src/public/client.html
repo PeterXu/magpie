@@ -29,6 +29,19 @@
     /* cursor.svg: teal arrow + dot — distinct from the macOS/Windows default
        arrows and an instant cue that the pointer is over the remote video.
        hotspot (2,2) = arrow tip; `default` is just a load-failure fallback. */
+    #tabs { flex: 0 0 auto; display: flex; background: #1a1a1a; border-bottom: 1px solid #000;
+            padding: 0 4px; height: 28px; overflow-x: auto; }
+    #tabs .tab { display: flex; align-items: center; gap: 6px; padding: 4px 12px;
+                 background: #2a2a2a; color: #ccc; border: none; border-radius: 4px 4px 0 0;
+                 cursor: pointer; min-width: 80px; max-width: 200px; font: 12px sans-serif; }
+    #tabs .tab.active { background: #333; color: #fff; }
+    #tabs .tab:hover:not(.active) { background: #333; }
+    #tabs .tab .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tabs .tab .close { opacity: 0.5; font-size: 14px; line-height: 1; }
+    #tabs .tab .close:hover { opacity: 1; }
+    #tabs .new-tab { background: transparent; color: #888; border: none; padding: 4px 10px;
+                     cursor: pointer; font-size: 16px; }
+    #tabs .new-tab:hover { color: #fff; }
   </style>
 </head>
 <body>
@@ -39,6 +52,7 @@
     <input id="url" placeholder="https://..." />
     <button id="go">Go</button>
   </div>
+  <div id="tabs"></div>
   <div id="stage">
     <video id="v" autoplay playsinline muted></video>
   </div>
@@ -62,17 +76,44 @@
       fwdBtn.disabled = !nav || !nav.canForward;
     }
 
+    function renderTabs(msg) {
+      const container = document.getElementById("tabs");
+      container.innerHTML = "";
+      if (!msg || !msg.pages) return;
+      for (const p of msg.pages) {
+        const tab = document.createElement("button");
+        tab.className = "tab" + (p.active ? " active" : "");
+        tab.dataset.id = p.id;
+        tab.innerHTML = `<span class="title" title="${p.url}">${p.title || p.url}</span><span class="close">×</span>`;
+        tab.addEventListener("click", (e) => {
+          if (e.target.classList.contains("close")) {
+            send({ t: "close-tab", id: p.id });
+          } else {
+            send({ t: "switch-tab", id: p.id });
+          }
+        });
+        container.appendChild(tab);
+      }
+      const newBtn = document.createElement("button");
+      newBtn.className = "new-tab";
+      newBtn.textContent = "+";
+      newBtn.addEventListener("click", () => send({ t: "new-tab" }));
+      container.appendChild(newBtn);
+    }
+
     function connect() {
       const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/signaling");
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.t === "hello") {
           applyNav({ url: msg.url, canBack: msg.canBack, canForward: msg.canForward });
+          renderTabs({ pages: msg.pages, activeId: msg.activeId });
           window._iceServers = msg.iceServers || [];
           window._magpieCodecs = msg.magpieCodecs || [];
           if (!pc) startPeer();                 // start AFTER we have iceServers + magpieCodecs
         }
         else if (msg.t === "nav") applyNav(msg);  // URL + button state after any navigation
+        else if (msg.t === "tabs") renderTabs(msg);
         else if (msg.t === "answer") pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }).then(attachReceiver);
         else if (msg.t === "reload") location.reload();  // crash recovery: reload the CLIENT page
       };

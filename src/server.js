@@ -81,6 +81,12 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
           // "refresh" (not "reload"): the crash-recovery broadcast {t:"reload"}
           // means "reload the CLIENT page" — this is "reload the REMOTE page".
           await browserSession.reload();
+        } else if (msg.t === "switch-tab") {
+          await browserSession.switchPage(msg.id);
+        } else if (msg.t === "close-tab") {
+          await browserSession.closePage(msg.id);
+        } else if (msg.t === "new-tab") {
+          await browserSession.newPage();
         } else if (msg.t === "status") {
           send({ t: "status", viewport: browserSession.getViewport(), url: browserSession.getUrl() });
         } else if (msg.t === "mouse" || msg.t === "wheel" || msg.t === "key") {
@@ -96,7 +102,8 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
     // message handler above is already registered, so no early send is lost.
     void (async () => {
       const nav = await browserSession.getNavState();
-      send({ t: "hello", viewport: browserSession.getViewport(), url: nav.url, canBack: nav.canBack, canForward: nav.canForward, iceServers: clientIceServers, magpieCodecs: streamerPeer.getSenderCodecs() });
+      const tabs = browserSession.getTabsState();
+      send({ t: "hello", viewport: browserSession.getViewport(), url: nav.url, canBack: nav.canBack, canForward: nav.canForward, iceServers: clientIceServers, magpieCodecs: streamerPeer.getSenderCodecs(), pages: tabs.pages, activeId: tabs.activeId });
     })();
   });
 
