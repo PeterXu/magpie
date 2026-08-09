@@ -3,12 +3,13 @@
 ## What is magpie
 
 Remote browser instance service: a single headless Chromium opened to a default
-URL (`https://gitee.com`), streamed to a single remote user over WebRTC video.
+URL (`about:blank`), streamed to a single remote user over WebRTC video.
 Mouse / keyboard / navigation round-trip back over a signaling WebSocket.
 
-**Session model: single-instance, single-user.** One Chromium, one target page,
-one WebRTC peer, at a time. v1 has no multi-session, no auth, no audio, no
-clipboard, no runtime resize.
+**Session model: single-instance, single-user, multi-tab.** One Chromium instance
+with multiple tabs, one active tab streamed at a time via WebRTC. Users can switch
+between tabs, open new tabs, and close tabs via the tab bar UI. v1 has no
+multi-session, no auth, no audio, no clipboard, no runtime resize.
 
 ## Commands
 
@@ -22,7 +23,7 @@ npm test                          # node --test (unit + integration + spike + e2
 Env: `src/env.js` auto-loads a `.env` file from the cwd at startup (real/shell
 env wins over the file; no new dep — the project stays at two). `.env.example`
 is the template. Defaults in `src/index.js` + `src/config.js`: `PORT` (8080), `HOST`
-(`0.0.0.0`; `127.0.0.1` for local-only), `MAGPIE_URL` (https://gitee.com),
+(`0.0.0.0`; `127.0.0.1` for local-only), `MAGPIE_URL` (`about:blank`),
 `MAGPIE_NO_SANDBOX` (`1` only in Docker). Video/quality (all optional, additive —
 unset = current behavior): `MAGPIE_WIDTH`/`MAGPIE_HEIGHT` (1280/800),
 `MAGPIE_QUALITY` (80, jpeg 1-100), `MAGPIE_FPS` (10, drives
@@ -82,9 +83,10 @@ an extension, this is why they're ruled out. Canonical design:
 | Path | Role |
 |---|---|
 | `src/index.js` | Entry. Launches ONE shared Playwright `browser`; wires BrowserSession + StreamerPeer + InputChannel + server; owns the crash→restart flow. |
-| `src/server.js` | `node:http` + `ws`. Serves `/`, `/client.html`, `/streamer.html`, `/healthz`. WS `/signaling` (client) and `/internal` (frame relay). `server.broadcast({t:'reload'})` on crash. |
-| `src/browser/BrowserSession.js` | Target page: Playwright context+page+CDP session. `startScreencast/dispatchMouse/dispatchWheel/dispatchKey/navigate/getViewport/getUrl/onCrash/restart`. Accepts an injected shared browser. |
+| `src/server.js` | `node:http` + `ws`. Serves `/`, `/client.html`, `/streamer.html`, `/healthz`. WS `/signaling` (client) and `/internal` (frame relay). `server.broadcast({t:'reload'})` on crash. Handles multi-tab messages (`switch-tab`, `close-tab`, `new-tab`). |
+| `src/browser/BrowserSession.js` | Target page: Playwright context + multi-tab management. `_pages` Map tracks all open tabs; `_activePageId` tracks the current screencast target. `startScreencast/dispatchMouse/dispatchWheel/dispatchKey/navigate/getViewport/getUrl/onCrash/restart`. Accepts an injected shared browser. |
 | `src/browser/launch-options.js` | **Single source** for Chromium launch flags — both `index.js` (shared browser) and `BrowserSession` (self-launch) call it. `MAGPIE_NO_SANDBOX=1` → `--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage` (avoids the 64MB container `/dev/shm` crash). |
+| `src/browser/blank-page.js` | HTML content for blank tabs. Pure CSS gradient background with magpie watermark logo. Used for initial `about:blank` and new tabs created by the user. |
 | `src/streamer/StreamerPeer.js` | Manages the streamer page in the shared browser (separate context). `relayOffer(sdp)→answerSdp` via `page.evaluate(window.relayOffer)`; `pushFrame(jpeg)` over the `/internal` socket. |
 | `src/streamer/streamer.html` | canvas + `captureStream(FPS)` (default 10, via `?fps=`) + page-side `RTCPeerConnection`; receives JPEG frames on `/internal`; applies sender caps from `?bitrate=&maxFps=&degradation=`. Codec selection happens client-side, not here. Sets `window.__ready=true`, exposes `window.__magpieCfg`. |
 | `src/webrtc/InputChannel.js` | Parses `/signaling` input msgs → maps coords → dispatches to BrowserSession. |
@@ -93,7 +95,7 @@ an extension, this is why they're ruled out. Canonical design:
 | `src/webrtc/ice-servers.js` | Builds STUN+TURN `iceServers` from a coturn host; returns `[]` when no host/creds (native run). |
 | `src/config.js` | Pure `loadConfig(env)` + `defaultBitrate`/`resolveMaxBitrate`: reads/validates `MAGPIE_*` video+quality env, never throws. Drives viewport, screencast opts, and WebRTC sender caps. |
 | `src/webrtc/codec-pick.js` | Pure `pickCodec(magpie, client, chain)`: first codec in `[av1,vp9,vp8,h264]` both sides support; used by the client to narrow the offer m-line. |
-| `src/public/client.html` | Client: `/signaling` WS + `RTCPeerConnection(recvonly)` + input capture. `?relay=1` forces `iceTransportPolicy:'relay'` (debug TURN). |
+| `src/public/client.html` | Client: `/signaling` WS + `RTCPeerConnection(recvonly)` + input capture. Tab bar UI rendered from `hello` and `tabs` messages. `?relay=1` forces `iceTransportPolicy:'relay'` (debug TURN). |
 
 ### Wiring notes (easy to get wrong)
 
@@ -118,7 +120,10 @@ an extension, this is why they're ruled out. Canonical design:
 - **Pure unit** — `test/webrtc/{coords,keys,ice-servers}.test.js`,
   `test/browser/launch-options.test.js`.
 - **Integration** — `test/browser/BrowserSession.*.test.js`: screencast frames,
-  CDP input injection against `test/fixtures/click-target.html`, crash→restart.
+  CDP input injection against `test/fixtures/click-target.html`, crash→restart,
+  multi-tab operations (switch/close/new).
+- **Concurrency** — `test/browser/BrowserSession.concurrent.test.js`: verifies
+  race condition protection for rapid tab creation.
 - **Spike** — `test/spike.capturestream.test.js`: proves headless
   `canvas.captureStream()` actually yields video (the biggest design risk; was
   an early gate task).
@@ -128,6 +133,30 @@ an extension, this is why they're ruled out. Canonical design:
 Tests use `node:test` + `node:assert/strict`; boot helpers inject a shared
 `browser`. Tests that mutate `process.env` (e.g. `MAGPIE_NO_SANDBOX`) must clean
 up in a `finally`.
+
+## Multi-tab implementation
+
+**Architecture**:
+- `_pages` Map stores all open pages: `pageId → { page, cdp, title, url }`
+- `_activePageId` tracks which page is currently being screencast
+- `context.on('page')` captures all new pages (including `target="_blank"`)
+- Single WebRTC stream switches between tabs on demand
+
+**Tab operations**:
+- `newPage()`: Creates blank tab with magpie watermark, auto-switches to it
+- `switchPage(pageId)`: Switches screencast target, broadcasts URL change
+- `closePage(pageId)`: Closes tab, switches to last remaining tab
+- Race condition protection via `_newPageInProgress` lock
+
+**Client UI**:
+- Tab bar rendered from `{t:'tabs', pages, activeId}` messages
+- Each tab shows title and close button
+- "+" button creates new tabs (with concurrency protection)
+
+**Screencast switching**:
+- Old tab: `Page.stopScreencast`, remove listeners
+- New tab: `Page.startScreencast`, wire frame handlers
+- Automatic on tab switch and close
 
 ## Code conventions
 
