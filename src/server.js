@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_HTML = path.join(__dirname, "public", "client.html");
+const CURSOR_SVG = path.join(__dirname, "public", "cursor.svg");
 const STREAMER_HTML = path.join(__dirname, "streamer", "streamer.html");
 const CODEC_PICK_JS = path.join(__dirname, "webrtc", "codec-pick.js");
 
@@ -28,6 +29,7 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
     if (url.pathname === "/healthz") { res.writeHead(200, { "content-type": "text/plain" }); return res.end("ok"); }
     if (url.pathname === "/" || url.pathname === "/client.html") return serveFile(res, CLIENT_HTML, "text/html; charset=utf-8");
     if (url.pathname === "/streamer.html") return serveFile(res, STREAMER_HTML, "text/html; charset=utf-8");
+    if (url.pathname === "/cursor.svg") return serveFile(res, CURSOR_SVG, "image/svg+xml");
     if (url.pathname === "/codec-pick.js") return serveFile(res, CODEC_PICK_JS, "text/javascript");
     res.writeHead(404); res.end("not found");
   });

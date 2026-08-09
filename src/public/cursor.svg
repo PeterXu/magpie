@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- magpie remote pointer: solid teal arrow (distinct from the monochrome
+       macOS/Windows default arrows) + a small teal dot, the classic "you are
+       inside a remote video session" marker. White halo + thin dark edge keep
+       it visible on any page background. Hotspot = arrow tip (2,2), set in CSS. -->
+  <path d="M2 2 L2 24 L8 18 L12 28 L17 26 L13 16 L20 16 Z" fill="#0d9488" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M2 2 L2 24 L8 18 L12 28 L17 26 L13 16 L20 16 Z" fill="#0d9488" stroke="#0f172a" stroke-width="1.25" stroke-linejoin="round"/>
+  <circle cx="25" cy="25" r="4" fill="#0d9488" stroke="#ffffff" stroke-width="1.75"/>
+</svg>

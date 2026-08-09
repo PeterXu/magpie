@@ -5,7 +5,10 @@
   <title>magpie</title>
   <style>
     html, body { margin: 0; background: #111; }
-    #v { width: 100vw; height: auto; display: block; cursor: crosshair; }
+    #v { width: 100vw; height: auto; display: block; cursor: url("/cursor.svg") 2 2, default; }
+    /* cursor.svg: teal arrow + dot — distinct from the macOS/Windows default
+       arrows and an instant cue that the pointer is over the remote video.
+       hotspot (2,2) = arrow tip; `default` is just a load-failure fallback. */
     #bar { position: fixed; top: 0; right: 0; background: #222; color: #eee;
            padding: 6px; display: flex; gap: 6px; font: 13px sans-serif; }
     #url { width: 320px; }
