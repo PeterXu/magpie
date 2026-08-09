@@ -16,8 +16,8 @@ services:
       - path: .env
         required: false
     environment:
-      - MAGPIE_URL=https://gitee.com
-      - MAGPIE_NO_SANDBOX=1
+      - MAGPIE_URL=${MAGPIE_URL:-about:blank}
+      - MAGPIE_NO_SANDBOX=${MAGPIE_NO_SANDBOX:-1}
       - HOST=0.0.0.0
       - PORT=8080
       - MAGPIE_HOST_IP=${MAGPIE_HOST_IP:-}

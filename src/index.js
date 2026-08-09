@@ -15,7 +15,7 @@ loadEnvFile();
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "0.0.0.0";
-const DEFAULT_URL = process.env.MAGPIE_URL ?? "https://gitee.com";
+const DEFAULT_URL = process.env.MAGPIE_URL ?? "about:blank";
 const cfg = loadConfig();
 const HOST_IP = process.env.MAGPIE_HOST_IP ?? "";
 const TURN_USER = process.env.MAGPIE_TURN_USER ?? "magpie";

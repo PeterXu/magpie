@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import { chromiumLaunchOptions } from "./launch-options.js";
 
 export class BrowserSession {
-  constructor({ url = "https://gitee.com", width = 1280, height = 800, browser, screencast = { quality: 80 } } = {}) {
+  constructor({ url = "about:blank", width = 1280, height = 800, browser, screencast = { quality: 80 } } = {}) {
     this._url = url;
     this._width = width;
     this._height = height;
