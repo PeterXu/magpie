@@ -38,8 +38,8 @@ test("BrowserSession: getViewport", () => {
   assert.deepEqual(session.getViewport(), { width: 500, height: 400 });
 });
 
-test("BrowserSession: startScreencast forwards custom quality/every", async () => {
-  const session = new BrowserSession({ url: FIXTURE, width: 400, height: 300, screencast: { quality: 50, every: 40 } });
+test("BrowserSession: startScreencast forwards quality; passes no rate param", async () => {
+  const session = new BrowserSession({ url: FIXTURE, width: 400, height: 300, screencast: { quality: 50 } });
   await session.start();
   try {
     const calls = [];
@@ -52,9 +52,12 @@ test("BrowserSession: startScreencast forwards custom quality/every", async () =
     await session.stopScreencast();
     assert.equal(calls.length, 1);
     assert.equal(calls[0].quality, 50);
-    assert.equal(calls[0].every, 40);
     assert.equal(calls[0].maxWidth, 400);
     assert.equal(calls[0].maxHeight, 300);
+    // Regression guard: everyNthFrame>1 starves static pages (see config.js),
+    // and `every` was never a real CDP param. Neither must leak into the call.
+    assert.equal(calls[0].everyNthFrame, undefined);
+    assert.equal(calls[0].every, undefined);
   } finally {
     await session.stop();
   }

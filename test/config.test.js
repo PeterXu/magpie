@@ -5,7 +5,7 @@ import { loadConfig, defaultBitrate, resolveMaxBitrate } from "../src/config.js"
 test("loadConfig: defaults when env empty", () => {
   const c = loadConfig({});
   assert.deepEqual(c.viewport, { width: 1280, height: 800 });
-  assert.deepEqual(c.screencast, { quality: 80, every: 100 });
+  assert.deepEqual(c.screencast, { quality: 80 });
   assert.deepEqual(c.webrtc, {
     streamFps: 10,
     maxBitrate: 2560000,                 // adaptive default for 1280x800
@@ -14,16 +14,18 @@ test("loadConfig: defaults when env empty", () => {
   });
 });
 
-test("loadConfig: MAGPIE_FPS=30 drives every and streamFps", () => {
+test("loadConfig: MAGPIE_FPS drives streamFps (captureStream), not CDP rate", () => {
+  // MAGPIE_FPS no longer touches CDP screencast — everyNthFrame would starve
+  // static pages, so screencast carries only quality. fps caps output via
+  // canvas.captureStream(fps) on the streamer page.
   const c = loadConfig({ MAGPIE_FPS: "30" });
-  assert.equal(c.screencast.every, 33);
   assert.equal(c.webrtc.streamFps, 30);
+  assert.deepEqual(c.screencast, { quality: 80 });
 });
 
 test("loadConfig: MAGPIE_FPS=0 clamps to 1", () => {
   const c = loadConfig({ MAGPIE_FPS: "0" });
   assert.equal(c.webrtc.streamFps, 1);
-  assert.equal(c.screencast.every, 1000);
 });
 
 test("loadConfig: MAGPIE_FPS non-numeric falls back to default", () => {

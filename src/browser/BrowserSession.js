@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import { chromiumLaunchOptions } from "./launch-options.js";
 
 export class BrowserSession {
-  constructor({ url = "https://gitee.com", width = 1280, height = 800, browser, screencast = { quality: 80, every: 100 } } = {}) {
+  constructor({ url = "https://gitee.com", width = 1280, height = 800, browser, screencast = { quality: 80 } } = {}) {
     this._url = url;
     this._width = width;
     this._height = height;
@@ -82,10 +82,12 @@ export class BrowserSession {
         await this._cdp.send("Page.screencastFrameAck", { sessionId });
       }
     });
+    // No everyNthFrame: it's a frame-divisor subsampler (see src/config.js) that
+    // starves static pages when >1. CDP defaults to 1 = emit per repaint; the
+    // output-fps cap lives in canvas.captureStream(fps) on the streamer page.
     await this._cdp.send("Page.startScreencast", {
       format: "jpeg",
       quality: this._screencast.quality,
-      every: this._screencast.every,
       maxWidth: this._width, maxHeight: this._height,
     });
   }

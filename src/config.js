@@ -10,6 +10,18 @@ const RANGE = {
   QUALITY: [1, 100],
   FPS:    [1, 60],
 };
+
+// Page.startScreencast's ONLY rate param is `everyNthFrame`, and it is a frame
+// DIVISOR ("send every Nth composited frame") — NOT a ms interval and NOT a true
+// rate cap. We intentionally do NOT set it (CDP then defaults to 1 = emit every
+// repaint): any N>1 delays the FIRST frame and starves static / low-repaint
+// pages, which need N repaints before emitting anything (probed: a fully static
+// page yields 1 frame at everyNthFrame=1 but 0 at everyNthFrame=2 or 10).
+// magpie serves arbitrary, often-static pages, so N must stay 1. The real
+// output-fps cap is canvas.captureStream(fps) on the streamer page: CDP pushes
+// one JPEG per repaint, and captureStream samples the canvas at fps. (The old
+// code passed `every: round(1000/fps)` — a non-existent param CDP silently
+// ignored, so capture ran uncapped at the ~98fps compositor rate anyway.)
 const DEGRADATIONS = ["maintain-resolution", "maintain-framerate", "balanced"];
 const DEFAULT_DEGRADATION = "maintain-resolution";
 
@@ -53,7 +65,6 @@ export function loadConfig(env = process.env) {
   const height = clampInt(env.MAGPIE_HEIGHT, DEFAULTS.HEIGHT, RANGE.HEIGHT, "MAGPIE_HEIGHT");
   const quality = clampInt(env.MAGPIE_QUALITY, DEFAULTS.QUALITY, RANGE.QUALITY, "MAGPIE_QUALITY");
   const fps = clampInt(env.MAGPIE_FPS, DEFAULTS.FPS, RANGE.FPS, "MAGPIE_FPS");
-  const every = Math.max(1, Math.round(1000 / fps));
 
   const maxBitrate = resolveMaxBitrate(env.MAGPIE_MAX_BITRATE, width, height);
 
@@ -74,7 +85,7 @@ export function loadConfig(env = process.env) {
 
   return {
     viewport: { width, height },
-    screencast: { quality, every },
+    screencast: { quality },
     webrtc: {
       streamFps: fps,
       maxBitrate,

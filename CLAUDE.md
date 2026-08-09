@@ -23,8 +23,11 @@ Env (defaults in `src/index.js` + `src/config.js`): `PORT` (8080), `HOST`
 (`0.0.0.0`; `127.0.0.1` for local-only), `MAGPIE_URL` (https://gitee.com),
 `MAGPIE_NO_SANDBOX` (`1` only in Docker). Video/quality (all optional, additive —
 unset = current behavior): `MAGPIE_WIDTH`/`MAGPIE_HEIGHT` (1280/800),
-`MAGPIE_QUALITY` (80, jpeg 1-100), `MAGPIE_FPS` (10, drives both CDP `every` and
-`captureStream`), `MAGPIE_MAX_BITRATE` (adaptive default from viewport, ~2.5bps/px
+`MAGPIE_QUALITY` (80, jpeg 1-100), `MAGPIE_FPS` (10, drives
+`canvas.captureStream(fps)` on the streamer page — the real output-fps cap. It
+does NOT touch CDP: `Page.startScreencast`'s only rate param is `everyNthFrame`,
+a frame divisor that starves static pages when >1, so we leave it unset and CDP
+emits one JPEG per repaint), `MAGPIE_MAX_BITRATE` (adaptive default from viewport, ~2.5bps/px
 clamped [1.5M,8M]; `0`/`none`/`off` to disable; bps, accepts `2500k`/`2.5m`),
 `MAGPIE_MAX_FRAMERATE` (unset), `MAGPIE_DEGRADATION` (`maintain-resolution`;
 `maintain-resolution`/`maintain-framerate`/`balanced`). Video codec is

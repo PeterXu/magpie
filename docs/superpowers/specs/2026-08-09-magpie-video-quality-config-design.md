@@ -4,6 +4,19 @@
 - 状态:已通过设计评审,待编写实现计划
 - 上游设计:`docs/superpowers/specs/2026-08-08-magpie-remote-browser-design.md`
 
+> **修正(2026-08-09,实测推翻本文档的 CDP 帧率前提):**
+> `Page.startScreencast` **没有 `every` 参数**;CDP 对未知字段静默忽略,故下文
+> "`every:100` 把采集上限锁在 10fps" 从未生效——screencast 一直按合成器速率
+> 无上限推帧(运动时实测约 98fps)。CDP 唯一的帧率参数是 **`everyNthFrame`**,且
+> 它是**帧计数除数**(每隔 N 帧发一帧),不是毫秒间隔、也不是真正的码率上限。
+> 实测:静态页面 `everyNthFrame=1` 发 1 帧(初始合成),但 `=2` 或 `=10` 发 **0 帧**
+> ——任意 N>1 都会饿死静态/低重绘内容(需累积 N 次重绘才发一帧)。magpie 服务的是
+> 任意(常静态)页面,所以 `everyNthFrame` 必须 保持 1(CDP 默认)。结论:**不再从
+> fps 派生 CDP 帧率参数**;`screencast` 配置只剩 `quality`。真正决定输出帧率的是
+> streamer 页的 `canvas.captureStream(fps)`——CDP 每次重绘推一帧 JPEG,canvas 按
+> `fps` 采样。`MAGPIE_FPS` 现在只驱动 `captureStream(fps)`。下文凡是 `every`
+> (ms 语义)之处均已按此修正实现,文档正文保留以记录原始设计推理。
+
 ## 1. 目标与背景
 
 视频管线分两层:**采集层**(CDP `Page.startScreencast` → Node → streamer 页 canvas)与**传输层**(streamer 页内 Chromium 原生 libwebrtc 编码 → client `<video>`)。当前两层的画质/帧率/分辨率参数**全部硬编码**,无任何定制接口;且两层之间的帧率参数互不协调。本设计为两层补齐一组**启动期 env 配置**,使画质可定制。
