@@ -12,6 +12,7 @@ RUN npm ci \
  && rm -rf /var/lib/apt/lists/*
 COPY --chown=node:node src ./src
 ENV NODE_ENV=production \
+    NODE_NO_WARNINGS=1 \
     MAGPIE_NO_SANDBOX=1 \
     HOST=0.0.0.0 \
     PORT=8080
