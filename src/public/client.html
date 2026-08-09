@@ -642,15 +642,42 @@
 
     function disconnect() {
       isConnected = false;
+
+      // Close WebRTC connection
       if (pc) {
-        pc.close();
+        try {
+          pc.ontrack = null;
+          pc.onicecandidate = null;
+          pc.onconnectionstatechange = null;
+          pc.oniceconnectionstatechange = null;
+          pc.close();
+        } catch (e) {
+          console.warn('Error closing RTCPeerConnection:', e);
+        }
         pc = null;
       }
+
+      // Close WebSocket connection
       if (window._ws) {
-        window._ws.close();
+        try {
+          window._ws.onopen = null;
+          window._ws.onmessage = null;
+          window._ws.onclose = null;
+          window._ws.onerror = null;
+          window._ws.close();
+        } catch (e) {
+          console.warn('Error closing WebSocket:', e);
+        }
         window._ws = null;
       }
+
+      // Clear video stream
       video.srcObject = null;
+
+      // Clear stored ICE servers and codecs (force re-fetch on next connect)
+      window._iceServers = null;
+      window._magpieCodecs = null;
+
       updateConnectionStatus(false);
     }
 
@@ -677,9 +704,27 @@
       const rtcConfig = { iceServers };
       if (relay) rtcConfig.iceTransportPolicy = "relay";
       pc = new RTCPeerConnection(rtcConfig);
+
       const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
       narrowCodec(transceiver);               // offerer-side: force single preferred codec
+
+      // Monitor WebRTC connection state for debugging
+      pc.onconnectionstatechange = () => {
+        console.log('WebRTC connection state:', pc.connectionState);
+        if (pc.connectionState === 'failed') {
+          console.error('WebRTC connection failed');
+          updateConnectionStatus(false);
+        } else if (pc.connectionState === 'connected') {
+          console.log('WebRTC connected successfully');
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', pc.iceConnectionState);
+      };
+
       pc.ontrack = (e) => { video.srcObject = e.streams[0]; };
+
       await pc.setLocalDescription(await pc.createOffer());
       // Wait for ICE gathering so the TURN relay candidate is included in the
       // offer (TURN allocation is a round-trip; sending early omits it).
