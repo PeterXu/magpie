@@ -83,6 +83,10 @@ export class BrowserSession {
   }
 
   async navigate(url) {
+    // Normalize: add https:// if no protocol present (matches browser behavior)
+    if (url && !/^[a-z]+:\/\//i.test(url) && !url.startsWith("about:")) {
+      url = "https://" + url;
+    }
     this._url = url;
     if (this._page) await this._page.goto(url, { waitUntil: "domcontentloaded" });
   }
