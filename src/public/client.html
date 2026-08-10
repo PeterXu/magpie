@@ -526,6 +526,7 @@
   </div>
   <script type="module">
     import { pickCodec } from "/codec-pick.js";
+    import { MagpiePeer } from "/MagpiePeer.js";
     const video = document.getElementById("v");
     const urlInput = document.getElementById("url");
     const goBtn = document.getElementById("go");
@@ -537,8 +538,15 @@
     const statusDot = document.getElementById("statusDot");
     const statusText = document.getElementById("statusText");
 
-    let pc = null;
     let isConnected = false;
+    let peer = null;
+    let currentConnection = null;
+
+    // 时间戳辅助函数
+    function timestamp() {
+      const now = new Date();
+      return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+    }
 
     // Panel switching logic (preserves connection state)
     window.switchPanel = function(panelName) {
@@ -617,275 +625,157 @@
       container.appendChild(newBtn);
     }
 
-    // 时间戳辅助函数
-    function timestamp() {
-      const now = new Date();
-      return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
-    }
+    async function connect() {
+      try {
+        console.log(`[${timestamp()}] [Client] Connecting...`);
 
-    function connect() {
-      const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/signaling");
+        // Create new peer with signaling URL
+        peer = new MagpiePeer({
+          url: location.origin.replace(/^http/, "ws") + "/signaling",
+          reconnectInterval: 1000,
+          maxReconnectAttempts: 5
+        });
 
-      ws.onopen = () => {
-        console.log(`[${timestamp()}] [Client] WebSocket connected`);
-        updateConnectionStatus(true);
-      };
+        // Setup peer event handlers
+        peer.on('open', (id, helloMsg) => {
+          console.log(`[${timestamp()}] [Client] Peer opened with ID: ${id}`);
 
-      ws.onerror = (e) => {
-        console.error(`[${timestamp()}] [Client] WebSocket error:`, e);
-      };
-
-      ws.onmessage = async (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.t === "hello") {
-          applyNav({ url: msg.url, canBack: msg.canBack, canForward: msg.canForward });
-          renderTabs({ pages: msg.pages, activeId: msg.activeId });
-          window._iceServers = msg.iceServers || [];
-          window._magpieCodecs = msg.magpieCodecs || [];
-          if (!pc) startPeer();
-        }
-        else if (msg.t === "nav") applyNav(msg);
-        else if (msg.t === "tabs") renderTabs(msg);
-        else if (msg.t === "clipboard") {
-          try {
-            navigator.clipboard.writeText(msg.text);
-          } catch (err) {
-            console.error(`[${timestamp()}] Failed to write clipboard:`, err);
-          }
-        }
-        else if (msg.t === "answer") {
-          console.log(`[${timestamp()}] [Client] Received answer, setting remote description`);
-          pc.setRemoteDescription({ type: "answer", sdp: msg.sdp })
-            .then(() => {
-              console.log(`[${timestamp()}] [Client] Remote description set successfully`);
-              attachReceiver();
-            })
-            .catch(err => {
-              console.error(`[${timestamp()}] [Client] Error setting remote description:`, err);
+          // Apply initial nav state from hello message
+          if (helloMsg) {
+            applyNav({
+              url: helloMsg.url,
+              canBack: helloMsg.canBack,
+              canForward: helloMsg.canForward
             });
-        }
-        else if (msg.t === "reload") location.reload();
-      };
+            renderTabs({
+              pages: helloMsg.pages,
+              activeId: helloMsg.activeId
+            });
+          }
+        });
 
-      ws.onclose = () => {
-        console.log(`[${timestamp()}] [Client] WebSocket closed`);
+        peer.on('message', (msg) => {
+          // Handle non-WebRTC messages (nav, tabs, clipboard, etc.)
+          if (msg.t === "nav") applyNav(msg);
+          else if (msg.t === "tabs") renderTabs(msg);
+          else if (msg.t === "clipboard") {
+            try {
+              navigator.clipboard.writeText(msg.text);
+            } catch (err) {
+              console.error(`[${timestamp()}] Failed to write clipboard:`, err);
+            }
+          }
+          else if (msg.t === "reload") location.reload();
+        });
+
+        peer.on('error', (err) => {
+          console.error(`[${timestamp()}] [Client] Peer error:`, err);
+          updateConnectionStatus(false);
+        });
+
+        peer.on('signalDisconnected', () => {
+          console.log(`[${timestamp()}] [Client] Signal disconnected`);
+          updateConnectionStatus(false);
+
+          // Auto-reconnect if user initiated the connection
+          if (isConnected && peer) {
+            setTimeout(connect, 1000);
+          }
+        });
+
+        // Test relay mode via URL parameter
+        const testRelay = new URLSearchParams(location.search).get("testrelay") === "1";
+
+        // Connect and wait for WebRTC connection
+        currentConnection = await peer.connect({
+          recvonly: true,
+          iceTransportPolicy: testRelay ? 'relay' : undefined,
+          codecSelect: (transceiver) => {
+            try {
+              const recv = RTCRtpReceiver.getCapabilities("video");
+              if (!recv || !recv.codecs) return;
+
+              const clientSet = [...new Set(recv.codecs.map((c) =>
+                (c.mimeType.split("/")[1] || "").toLowerCase()
+              ))];
+
+              const picked = pickCodec(peer.magpieCodecs || [], clientSet);
+              if (!picked) return;
+
+              const want = recv.codecs.filter((c) =>
+                (c.mimeType.split("/")[1] || "").toLowerCase() === picked
+              );
+              const rtx = recv.codecs.filter((c) => c.mimeType === "video/rtx");
+              transceiver.setCodecPreferences([...want, ...rtx]);
+            } catch (e) {
+              console.warn(`[${timestamp()}] Codec selection failed:`, e);
+            }
+          },
+          timeout: 10000
+        });
+
+        // Setup connection event handlers
+        currentConnection.on('stream', (remoteStream) => {
+          console.log(`[${timestamp()}] [Client] Received remote stream`);
+          video.srcObject = remoteStream;
+        });
+
+        currentConnection.on('error', (err) => {
+          console.error(`[${timestamp()}] [Client] Connection error:`, err);
+        });
+
+        console.log(`[${timestamp()}] [Client] Connected successfully`);
+        updateConnectionStatus(true);
+
+      } catch (err) {
+        console.error(`[${timestamp()}] [Client] Connection failed:`, err);
         updateConnectionStatus(false);
-        // Auto-reconnect only if user initiated the connection
-        if (isConnected) {
-          setTimeout(connect, 1000);
-        }
-      };
 
-      window._ws = ws;
+        // Cleanup on failure
+        if (peer) {
+          try {
+            peer.disconnect();
+          } catch (e) {
+            console.warn(`[${timestamp()}] Cleanup error:`, e);
+          }
+          peer = null;
+        }
+        currentConnection = null;
+        video.srcObject = null;
+      }
     }
 
     function disconnect() {
       console.log(`[${timestamp()}] [Client] Disconnecting...`);
       isConnected = false;
 
-      // Close WebRTC connection
-      if (pc) {
+      // Cleanup peer (will close connection and signal)
+      if (peer) {
         try {
-          // 移除所有事件监听器，防止异步回调
-          pc.ontrack = null;
-          pc.onicecandidate = null;
-          pc.onconnectionstatechange = null;
-          pc.oniceconnectionstatechange = null;
-          pc.onicegatheringstatechange = null;
-
-          // 触发ICE restart以释放资源
-          const receivers = pc.getReceivers();
-          receivers.forEach(r => {
-            try { r.track.stop(); } catch {}
-          });
-
-          pc.close();
-
-          // 延长等待时间到200ms，确保TURN deallocation完成
-          setTimeout(() => {
-            pc = null;
-            console.log(`[${timestamp()}] [Client] RTCPeerConnection fully closed`);
-          }, 200);
+          peer.disconnect();
         } catch (e) {
-          console.warn(`[${timestamp()}] Error closing RTCPeerConnection:`, e);
-          pc = null;
+          console.warn(`[${timestamp()}] Error disconnecting peer:`, e);
         }
+        peer = null;
       }
 
-      // Close WebSocket connection
-      if (window._ws) {
-        try {
-          window._ws.onopen = null;
-          window._ws.onmessage = null;
-          window._ws.onclose = null;
-          window._ws.onerror = null;
-          window._ws.close();
-        } catch (e) {
-          console.warn(`[${timestamp()}] Error closing WebSocket:`, e);
-        }
-        window._ws = null;
-      }
+      currentConnection = null;
 
       // Clear video stream
       video.srcObject = null;
-
-      // Clear stored ICE servers and codecs (force re-fetch on next connect)
-      window._iceServers = null;
-      window._magpieCodecs = null;
 
       console.log(`[${timestamp()}] [Client] Disconnected`);
       updateConnectionStatus(false);
     }
 
-    // Offerer-side codec selection. The encoder follows the OFFER's m-line order,
-    // so this MUST happen on the client (offerer), not the streamer. Narrow the
-    // video m-line to the single codec both magpie and this client support, per
-    // the fixed chain [av1,vp9,vp8,h264]. No-op if none mutually supported.
-    function narrowCodec(tr) {
-      try {
-        const recv = RTCRtpReceiver.getCapabilities("video");
-        if (!recv || !recv.codecs) return;
-        const clientSet = [...new Set(recv.codecs.map((c) => (c.mimeType.split("/")[1] || "").toLowerCase()))];
-        const picked = pickCodec(window._magpieCodecs || [], clientSet);
-        if (!picked) return;
-        const want = recv.codecs.filter((c) => (c.mimeType.split("/")[1] || "").toLowerCase() === picked);
-        const rtx = recv.codecs.filter((c) => c.mimeType === "video/rtx");
-        tr.setCodecPreferences([...want, ...rtx]);
-      } catch (e) { console.warn("magpie: codec narrow failed", e); }
-    }
-
-    async function startPeer() {
-      const iceServers = window._iceServers || [];
-      const relay = new URLSearchParams(location.search).get("relay") === "1";
-      const rtcConfig = { iceServers };
-      if (relay) rtcConfig.iceTransportPolicy = "relay";
-      pc = new RTCPeerConnection(rtcConfig);
-
-      // 监控ICE candidate收集过程
-      const candidates = { host: 0, stun: 0, turn: 0 };
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          const type = e.candidate.candidate.includes('typ relay') ? 'turn' :
-                       e.candidate.candidate.includes('typ srflx') ? 'stun' : 'host';
-          candidates[type]++;
-        } else {
-          console.log(`[${timestamp()}] [Client] ICE gathering complete: ${candidates.host} host, ${candidates.stun} stun, ${candidates.turn} turn`);
-        }
-      };
-
-      const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
-      narrowCodec(transceiver);
-
-      // Monitor WebRTC connection state
-      pc.onconnectionstatechange = () => {
-        console.log(`[${timestamp()}] [Client] WebRTC state: ${pc.connectionState}`);
-        if (pc.connectionState === 'failed') {
-          console.error(`[${timestamp()}] WebRTC connection failed`);
-          updateConnectionStatus(false);
-        } else if (pc.connectionState === 'connected') {
-          console.log(`[${timestamp()}] WebRTC connected successfully`);
-        }
-      };
-
-      pc.oniceconnectionstatechange = () => {
-        console.log(`[${timestamp()}] [Client] ICE state: ${pc.iceConnectionState}`);
-      };
-
-      pc.ontrack = (e) => {
-        console.log(`[${timestamp()}] [Client] ontrack event: ${e.streams.length} streams, track kind: ${e.track?.kind}`);
-        if (e.streams && e.streams[0]) {
-          video.srcObject = e.streams[0];
-          console.log(`[${timestamp()}] [Client] Video stream attached via ontrack`);
-        } else {
-          console.warn(`[${timestamp()}] [Client] ontrack fired but no streams`);
-        }
-      };
-
-      await pc.setLocalDescription(await pc.createOffer());
-      // Wait for ICE gathering so the TURN relay candidate is included in the
-      // offer (TURN allocation is a round-trip; sending early omits it).
-      const startTime = Date.now();
-
-      // 智能ICE gathering策略：检测到STUN candidate就发送，不等待完整gathering
-      await new Promise((resolve) => {
-        let hasStunCandidate = false;
-        const maxWait = 5000; // 最长等待5秒（从10秒减少）
-        const minWait = 500;  // 最少等待500ms，收集基本candidates
-
-        const timer = setTimeout(() => {
-          if (!hasStunCandidate) {
-            console.warn(`[${timestamp()}] [Client] No STUN candidate after waiting`);
-          }
-          resolve();
-        }, maxWait);
-
-        const minTimer = setTimeout(() => {
-          if (hasStunCandidate) {
-            clearTimeout(timer);
-            resolve();
-          }
-        }, minWait);
-
-        pc.addEventListener("icegatheringstatechange", () => {
-          if (pc.iceGatheringState === "complete") {
-            clearTimeout(timer);
-            clearTimeout(minTimer);
-            resolve();
-          }
-        });
-
-        pc.addEventListener("icecandidate", (e) => {
-          if (e.candidate && e.candidate.candidate.includes('typ srflx')) {
-            hasStunCandidate = true;
-            // 检测到STUN candidate，等待500ms让其他candidates收集完成
-            setTimeout(() => {
-              clearTimeout(timer);
-              resolve();
-            }, 500);
-          }
-        });
-      });
-
-      const elapsed = Date.now() - startTime;
-      const hasRelay = pc.localDescription.sdp.includes('typ relay');
-      console.log(`[${timestamp()}] [Client] ICE gathering: ${elapsed}ms, has relay: ${hasRelay}`);
-      window._lastOffer = pc.localDescription.sdp;
-      window._ws.send(JSON.stringify({ t: "offer", sdp: pc.localDescription.sdp }));
-    }
-
-    function waitForIceGathering(pc, timeoutMs = 5000) {
-      if (pc.iceGatheringState === "complete") return Promise.resolve();
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          console.warn(`[${timestamp()}] [Client] ICE gathering timeout after ${timeoutMs}ms`);
-          resolve();
-        }, timeoutMs);
-        pc.addEventListener("icegatheringstatechange", () => {
-          if (pc.iceGatheringState === "complete") { clearTimeout(timer); resolve(); }
-        });
-      });
-    }
-
-    // ontrack is unreliable in headless Chromium; poll-attach the receiver track as a fallback.
-    async function attachReceiver() {
-      console.log(`[${timestamp()}] [Client] attachReceiver called`);
-      for (let i = 0; i < 50; i++) {
-        const r = pc.getReceivers().find((r) => r.track && r.track.kind === "video");
-        if (r && r.track) {
-          if (!video.srcObject) {
-            video.srcObject = new MediaStream([r.track]);
-            console.log(`[${timestamp()}] [Client] Video stream attached via attachReceiver after ${i * 100}ms`);
-          } else {
-            console.log(`[${timestamp()}] [Client] Video stream already attached (via ontrack)`);
-          }
-          return;
-        }
-        await new Promise((res) => setTimeout(res, 100));
+    function send(obj, silent = false) {
+      if (peer && peer.signal && peer.signal.isConnected()) {
+        peer.signal.send(obj);
+      } else if (!silent) {
+        // Only warn for important messages (not mouse events)
+        console.warn(`[${timestamp()}] Cannot send: not connected`);
       }
-      console.warn(`[${timestamp()}] [Client] attachReceiver timeout: no video track found after 5s`);
     }
-
-    function send(obj) { if (window._ws && window._ws.readyState === 1) window._ws.send(JSON.stringify(obj)); }
 
     function coords(evt) {
       const r = video.getBoundingClientRect();
@@ -898,21 +788,22 @@
     video.addEventListener("mouseenter", () => { mouseOverVideo = true; });
     video.addEventListener("mouseleave", () => { mouseOverVideo = false; });
 
-    video.addEventListener("mousemove", (e) => send({ t: "mouse", ...coords(e), type: "moved" }));
+    // Mouse events - use silent mode (don't warn on disconnect)
+    video.addEventListener("mousemove", (e) => send({ t: "mouse", ...coords(e), type: "moved" }, true));
     video.addEventListener("mousedown", (e) => {
       // e.detail gives click count (1=single, 2=double, 3=triple)
       // Right-click (button=2) is handled here too - contextmenu event just prevents local menu
-      send({ t: "mouse", ...coords(e), type: "pressed", button: btn(e.button), clickCount: e.detail || 1 });
+      send({ t: "mouse", ...coords(e), type: "pressed", button: btn(e.button), clickCount: e.detail || 1 }, true);
     });
     video.addEventListener("mouseup", (e) => {
-      send({ t: "mouse", ...coords(e), type: "released", button: btn(e.button), clickCount: e.detail || 1 });
+      send({ t: "mouse", ...coords(e), type: "released", button: btn(e.button), clickCount: e.detail || 1 }, true);
     });
     video.addEventListener("dblclick", (e) => {
       // Double-click: send with clickCount: 2
-      send({ t: "mouse", ...coords(e), type: "pressed", button: btn(e.button), clickCount: 2 });
-      send({ t: "mouse", ...coords(e), type: "released", button: btn(e.button), clickCount: 2 });
+      send({ t: "mouse", ...coords(e), type: "pressed", button: btn(e.button), clickCount: 2 }, true);
+      send({ t: "mouse", ...coords(e), type: "released", button: btn(e.button), clickCount: 2 }, true);
     });
-    video.addEventListener("wheel", (e) => { e.preventDefault(); send({ t: "wheel", ...coords(e), deltaX: e.deltaX, deltaY: e.deltaY }); });
+    video.addEventListener("wheel", (e) => { e.preventDefault(); send({ t: "wheel", ...coords(e), deltaX: e.deltaX, deltaY: e.deltaY }, true); });
 
     // Right-click context menu (local UI that sends commands to remote)
     video.addEventListener("contextmenu", (e) => {
@@ -1024,8 +915,8 @@
           const r = video.getBoundingClientRect();
           const x = lastContextMenuX;
           const y = lastContextMenuY;
-          send({ t: 'mouse', x, y, displayW: r.width, displayH: r.height, type: 'pressed', button: 'left', clickCount: 2 });
-          send({ t: 'mouse', x, y, displayW: r.width, displayH: r.height, type: 'released', button: 'left', clickCount: 2 });
+          send({ t: 'mouse', x, y, displayW: r.width, displayH: r.height, type: 'pressed', button: 'left', clickCount: 2 }, true);
+          send({ t: 'mouse', x, y, displayW: r.width, displayH: r.height, type: 'released', button: 'left', clickCount: 2 }, true);
           break;
       }
     }
@@ -1189,7 +1080,7 @@
 
     // Connection control buttons
     connectBtn.addEventListener("click", () => {
-      if (!window._ws || window._ws.readyState !== 1) {
+      if (!peer || !peer.signal.isConnected()) {
         connect();
       }
     });

@@ -9,6 +9,11 @@ const CLIENT_HTML = path.join(__dirname, "public", "client.html");
 const CURSOR_SVG = path.join(__dirname, "public", "cursor.svg");
 const STREAMER_HTML = path.join(__dirname, "streamer", "streamer.html");
 const CODEC_PICK_JS = path.join(__dirname, "webrtc", "codec-pick.js");
+const EVENT_EMITTER_JS = path.join(__dirname, "webrtc", "EventEmitter.js");
+const MAGPIE_PEER_JS = path.join(__dirname, "webrtc", "MagpiePeer.js");
+const MAGPIE_CONNECTION_JS = path.join(__dirname, "webrtc", "MagpieConnection.js");
+const MAGPIE_NEGOTIATOR_JS = path.join(__dirname, "webrtc", "MagpieNegotiator.js");
+const MAGPIE_SIGNAL_CHANNEL_JS = path.join(__dirname, "webrtc", "MagpieSignalChannel.js");
 
 async function serveFile(res, file, type) {
   try {
@@ -31,6 +36,11 @@ export function createServer({ browserSession, inputChannel, streamerPeer, clien
     if (url.pathname === "/streamer.html") return serveFile(res, STREAMER_HTML, "text/html; charset=utf-8");
     if (url.pathname === "/cursor.svg") return serveFile(res, CURSOR_SVG, "image/svg+xml");
     if (url.pathname === "/codec-pick.js") return serveFile(res, CODEC_PICK_JS, "text/javascript");
+    if (url.pathname === "/EventEmitter.js") return serveFile(res, EVENT_EMITTER_JS, "text/javascript");
+    if (url.pathname === "/MagpiePeer.js") return serveFile(res, MAGPIE_PEER_JS, "text/javascript");
+    if (url.pathname === "/MagpieConnection.js") return serveFile(res, MAGPIE_CONNECTION_JS, "text/javascript");
+    if (url.pathname === "/MagpieNegotiator.js") return serveFile(res, MAGPIE_NEGOTIATOR_JS, "text/javascript");
+    if (url.pathname === "/MagpieSignalChannel.js") return serveFile(res, MAGPIE_SIGNAL_CHANNEL_JS, "text/javascript");
     res.writeHead(404); res.end("not found");
   });
 
