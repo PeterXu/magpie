@@ -422,7 +422,10 @@ export class BrowserSession {
       windowsVirtualKeyCode: mapKey.windowsVirtualKeyCode,
       modifiers,
     });
-    if (mapKey.text && type === "keyDown") {
+    // Only send char event if no Ctrl/Command modifier (otherwise shortcuts like Ctrl+A would type 'a')
+    const hasModifier = modifiers & 0b111; // Alt=1, Ctrl=2, Meta=4, Shift=8
+    const isCtrlOrMeta = modifiers & 0b110; // Ctrl=2 or Meta=4
+    if (mapKey.text && type === "keyDown" && !isCtrlOrMeta) {
       await entry.cdp.send("Input.dispatchKeyEvent", { type: "char", text: mapKey.text, modifiers });
     }
   }
