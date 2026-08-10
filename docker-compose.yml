@@ -21,30 +21,42 @@ services:
       - HOST=0.0.0.0
       - PORT=8080
       - MAGPIE_HOST_IP=${MAGPIE_HOST_IP:-}
+      - MAGPIE_TURN_HOST=${MAGPIE_TURN_HOST:-iceturn}
       - MAGPIE_TURN_USER=${MAGPIE_TURN_USER:-magpie}
       - MAGPIE_TURN_PASS=${MAGPIE_TURN_PASS:-magpie}
     restart: unless-stopped
     depends_on:
-      - coturn
+      iceturn:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - magpie-network
 
-  coturn:
-    image: coturn/coturn:latest
-    command:
-      - "-c"
-      - "/turnserver.conf"
-      - "--user"
-      - "${MAGPIE_TURN_USER:-magpie}:${MAGPIE_TURN_PASS:-magpie}"
-      - "--external-ip"
-      - "${MAGPIE_HOST_IP:-127.0.0.1}"
+  iceturn:
+    image: iceturn:latest
     volumes:
-      - "./docker/turnserver.conf:/turnserver.conf:ro"
+      - ./docker/iceturn-config.yaml:/app/config.yaml:ro
     ports:
-      - "3478:3478"
+      - "3478:3478/tcp"
       - "3478:3478/udp"
-      - "49001-49016:49001-49016/udp"
+    environment:
+      - REALM=magpie.local
+      - PUBLIC_IP=${MAGPIE_HOST_IP:-127.0.0.1}
+      - STUN_PENDING_TIMEOUT=30s
+      - TURN_CREDENTIALS=${MAGPIE_TURN_USER:-magpie}:${MAGPIE_TURN_PASS:-magpie}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 3478 && nc -zu -w1 localhost 3478"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    networks:
+      - magpie-network
+
+networks:
+  magpie-network:
+    driver: bridge

@@ -20,10 +20,12 @@ const cfg = loadConfig();
 const HOST_IP = process.env.MAGPIE_HOST_IP ?? "";
 const TURN_USER = process.env.MAGPIE_TURN_USER ?? "magpie";
 const TURN_PASS = process.env.MAGPIE_TURN_PASS ?? "magpie";
-// Server-side peer (streamer page) reaches coturn by compose service name;
+const TURN_HOST = process.env.MAGPIE_TURN_HOST ?? "iceturn"; // Container name for Docker, or custom TURN host
+
+// Server-side peer (streamer page) reaches TURN by container name (Docker internal);
 // client-side peer reaches it via the host IP. Both empty when HOST_IP unset
 // (native run -> pure host candidates).
-const serverIceServers = HOST_IP ? buildIceServers({ host: "coturn", user: TURN_USER, pass: TURN_PASS }) : [];
+const serverIceServers = HOST_IP ? buildIceServers({ host: TURN_HOST, user: TURN_USER, pass: TURN_PASS }) : [];
 const clientIceServers = buildIceServers({ host: HOST_IP, user: TURN_USER, pass: TURN_PASS });
 
 // 验证ICE servers配置
