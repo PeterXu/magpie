@@ -478,11 +478,11 @@ export class BrowserSession {
     // Wait for browser to process
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Read remote clipboard
+    // Read selected text from remote browser (more reliable than clipboard API)
     try {
       const result = await entry.cdp.send("Runtime.evaluate", {
-        expression: "navigator.clipboard.readText()",
-        awaitPromise: true
+        expression: "window.getSelection().toString()",
+        awaitPromise: false
       });
 
       if (result.result && result.result.value && this.onClipboardChange) {
