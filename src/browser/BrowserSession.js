@@ -467,18 +467,29 @@ export class BrowserSession {
     // Send Ctrl/Command+C or X
     const isMac = process.platform === 'darwin';
     const modifiers = isMac ? 4 : 2;
+    const key = cut ? 'x' : 'c';
+    const code = cut ? 'KeyX' : 'KeyC';
 
+    // Send keyDown
     await entry.cdp.send("Input.dispatchKeyEvent", {
       type: "keyDown",
-      key: cut ? 'x' : 'c',
-      code: cut ? 'KeyX' : 'KeyC',
-      modifiers: modifiers
+      key,
+      code,
+      modifiers
     });
 
-    // Wait for browser to process
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Send keyUp to release modifier
+    await entry.cdp.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key,
+      code,
+      modifiers
+    });
 
-    // Read selected text from remote browser (more reliable than clipboard API)
+    // Wait for browser to process copy operation
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Read selected text from remote browser and sync to client clipboard
     try {
       const result = await entry.cdp.send("Runtime.evaluate", {
         expression: "window.getSelection().toString()",

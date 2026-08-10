@@ -767,6 +767,11 @@
     }
     const btn = (b) => (b === 2 ? "right" : b === 1 ? "middle" : "left");
 
+    // Track if mouse is over video (remote browser context)
+    let mouseOverVideo = false;
+    video.addEventListener("mouseenter", () => { mouseOverVideo = true; });
+    video.addEventListener("mouseleave", () => { mouseOverVideo = false; });
+
     video.addEventListener("mousemove", (e) => send({ t: "mouse", ...coords(e), type: "moved" }));
     video.addEventListener("mousedown", (e) => send({ t: "mouse", ...coords(e), type: "pressed", button: btn(e.button), clickCount: 1 }));
     video.addEventListener("mouseup", (e) => send({ t: "mouse", ...coords(e), type: "released", button: btn(e.button), clickCount: 1 }));
@@ -802,10 +807,9 @@
     // Handle clipboard shortcuts
     async function handleClipboardShortcut(e) {
       const key = e.key.toLowerCase();
-      console.log('[Clipboard] Key pressed:', key, 'Platform:', navigator.platform, 'Meta:', e.metaKey, 'Ctrl:', e.ctrlKey);
 
       if (key === 'v') {
-        // Paste: read local clipboard
+        // Paste: always read local clipboard and send to remote
         if (!await requestClipboardPermission()) {
           console.warn('[Clipboard] Permission denied');
           return;
@@ -813,30 +817,75 @@
 
         try {
           const text = await navigator.clipboard.readText();
-          console.log('[Clipboard] Read from clipboard:', text ? `${text.length} chars` : 'empty');
           if (text) {
             send({ t: "paste", text });
-            console.log('[Clipboard] Sent paste message to server');
           }
         } catch (err) {
           console.error('[Clipboard] Read failed:', err);
         }
       } else if (key === 'c' || key === 'x') {
-        // Copy/Cut: request remote read
-        send({ t: "copy", cut: key === 'x' });
+        // Copy/Cut: only handle when in remote video context
+        // When outside video, let local browser handle it normally
+        if (mouseOverVideo) {
+          // In remote context: send to remote and sync back to local clipboard
+          send({ t: "copy", cut: key === 'x' });
+        }
+        // else: don't preventDefault, let local browser handle copy normally
       } else if (key === 'a') {
-        // Select all: pass through with correct modifiers
+        // Select all: send to remote with correct modifiers
         send({ t: "key", type: "keyDown", key: e.key, code: e.code,
+               keyCode: e.keyCode, modifiers: getModifiers(e) });
+        send({ t: "key", type: "keyUp", key: e.key, code: e.code,
                keyCode: e.keyCode, modifiers: getModifiers(e) });
       }
     }
 
+    // Check if event target is a local input element
+    function isLocalInput(e) {
+      const target = e.target;
+      const tagName = target.tagName?.toLowerCase();
+      return tagName === 'input' || tagName === 'textarea' || target.isContentEditable;
+    }
+
     window.addEventListener("keydown", (e) => {
-      // Intercept clipboard shortcuts
-      if (isClipboardShortcut(e)) {
-        e.preventDefault();
-        handleClipboardShortcut(e);
+      // Skip all key handling for local input elements (URL bar, etc.)
+      if (isLocalInput(e)) {
         return;
+      }
+
+      // Handle clipboard shortcuts differently based on context
+      if (isClipboardShortcut(e)) {
+        const key = e.key.toLowerCase();
+
+        // For paste (V): always intercept and read local clipboard
+        if (key === 'v') {
+          e.preventDefault();
+          handleClipboardShortcut(e);
+          return;
+        }
+
+        // For copy/cut (C/X): only intercept when in remote context
+        if (key === 'c' || key === 'x') {
+          if (mouseOverVideo) {
+            // In remote video: intercept and handle
+            e.preventDefault();
+            handleClipboardShortcut(e);
+            return;
+          }
+          // Outside video: don't intercept, let local browser handle it
+          return;
+        }
+
+        // For select all (A): only intercept when in remote context
+        if (key === 'a') {
+          if (mouseOverVideo) {
+            e.preventDefault();
+            handleClipboardShortcut(e);
+            return;
+          }
+          // Outside video: don't intercept, let local browser handle it
+          return;
+        }
       }
 
       // Normal key event with correct modifiers
@@ -844,6 +893,20 @@
              keyCode: e.keyCode, modifiers: getModifiers(e) });
     });
     window.addEventListener("keyup", (e) => {
+      // Skip all key handling for local input elements
+      if (isLocalInput(e)) {
+        return;
+      }
+
+      // Don't send keyUp for clipboard shortcuts that were intercepted
+      if (isClipboardShortcut(e)) {
+        const key = e.key.toLowerCase();
+        // Paste always intercepted
+        if (key === 'v') return;
+        // Copy/cut/select-all only intercepted in remote context
+        if ((key === 'c' || key === 'x' || key === 'a') && mouseOverVideo) return;
+      }
+
       send({ t: "key", type: "keyUp", key: e.key, code: e.code,
              keyCode: e.keyCode, modifiers: getModifiers(e) });
     });
