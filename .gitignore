@@ -4,6 +4,5 @@ node_modules/
 mitmproxy
 lyrebird
 .playwright-mcp
-iceturn
 run_bld.sh
 *.log

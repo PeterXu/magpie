@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+*_test.go
+
+# Development files
+.vscode
+.idea
+
+# Binary
+bin/
+icecoordinator
+
+# Logs
+logs/
+*.log

@@ -37,16 +37,17 @@ services:
       - magpie-network
 
   iceturn:
-    image: iceturn:latest
+    build:
+      context: ./iceturn
+      dockerfile: Dockerfile
     volumes:
-      - ./docker/iceturn-config.yaml:/app/config.yaml:ro
+      - ./iceturn/config.yaml:/app/config.yaml:ro
     ports:
       - "3478:3478/tcp"
       - "3478:3478/udp"
     environment:
       - REALM=magpie.local
       - PUBLIC_IP=${MAGPIE_HOST_IP:-127.0.0.1}
-      - STUN_PENDING_TIMEOUT=30s
       - TURN_CREDENTIALS=${MAGPIE_TURN_USER:-magpie}:${MAGPIE_TURN_PASS:-magpie}
     restart: unless-stopped
     healthcheck:

@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  iceturn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: iceturn:latest
+    restart: unless-stopped
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+    environment:
+      - REALM=iceturn.local
+      - PUBLIC_IP=${PUBLIC_IP:-127.0.0.1}
+      - TURN_CREDENTIALS=iceturn:iceturn
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./logs:/var/log/iceturn
+    networks:
+      - iceturn-network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 3478 && nc -zu -w1 localhost 3478"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+networks:
+  iceturn-network:
+    driver: bridge
