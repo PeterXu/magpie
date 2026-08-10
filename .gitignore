@@ -3,4 +3,7 @@ node_modules/
 .env
 mitmproxy
 lyrebird
+.playwright-mcp
+iceturn
+run_bld.sh
 *.log
