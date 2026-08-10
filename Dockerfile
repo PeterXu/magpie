@@ -13,9 +13,7 @@ RUN npm ci \
 COPY --chown=node:node src ./src
 ENV NODE_ENV=production \
     NODE_NO_WARNINGS=1 \
-    MAGPIE_NO_SANDBOX=1 \
-    HOST=0.0.0.0 \
-    PORT=8080
+    MAGPIE_NO_SANDBOX=1
 EXPOSE 8080
 USER node
 CMD ["node", "src/index.js"]

@@ -6,20 +6,25 @@ services:
     # bridge 172.x is host-routable). For LAN/remote clients switch to
     # network_mode: host (Linux) — see README "Networking".
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     shm_size: 2gb            # Chromium stability (default 64MB /dev/shm can crash)
-    # Auto-load the host .env into the container environment (every MAGPIE_*
-    # video/quality var + MAGPIE_HOST_IP, etc.). required:false means no error
-    # when .env is absent. `environment:` below still takes precedence, so the
-    # Docker-essential values (NO_SANDBOX, HOST, PORT) stay fixed.
-    env_file:
-      - path: .env
-        required: false
+    # Explicit environment variables (no env_file for clarity and security).
+    # Only variables listed here enter the container. User can override via host .env.
     environment:
+      # Docker 安全配置（硬编码，不可覆盖）
+      - MAGPIE_NO_SANDBOX=1
+      # 服务器配置（可从 .env 覆盖）
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8080}
+      # 用户可配置项（从宿主机 .env 读取，或使用默认值）
       - MAGPIE_URL=${MAGPIE_URL:-about:blank}
-      - MAGPIE_NO_SANDBOX=${MAGPIE_NO_SANDBOX:-1}
-      - HOST=0.0.0.0
-      - PORT=8080
+      - MAGPIE_WIDTH=${MAGPIE_WIDTH:-1280}
+      - MAGPIE_HEIGHT=${MAGPIE_HEIGHT:-800}
+      - MAGPIE_QUALITY=${MAGPIE_QUALITY:-80}
+      - MAGPIE_FPS=${MAGPIE_FPS:-10}
+      - MAGPIE_MAX_BITRATE=${MAGPIE_MAX_BITRATE:-}
+      - MAGPIE_MAX_FRAMERATE=${MAGPIE_MAX_FRAMERATE:-}
+      - MAGPIE_DEGRADATION=${MAGPIE_DEGRADATION:-maintain-resolution}
       - MAGPIE_HOST_IP=${MAGPIE_HOST_IP:-}
       - MAGPIE_TURN_HOST=${MAGPIE_TURN_HOST:-iceturn}
       - MAGPIE_TURN_USER=${MAGPIE_TURN_USER:-magpie}
@@ -29,9 +34,9 @@ services:
       iceturn:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||'8080')+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
       retries: 3
     networks:
       - magpie-network
@@ -52,7 +57,7 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z localhost 3478 && nc -zu -w1 localhost 3478"]
-      interval: 30s
+      interval: 5s
       timeout: 3s
       retries: 3
     networks:
