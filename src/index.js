@@ -26,6 +26,10 @@ const TURN_PASS = process.env.MAGPIE_TURN_PASS ?? "magpie";
 const serverIceServers = HOST_IP ? buildIceServers({ host: "coturn", user: TURN_USER, pass: TURN_PASS }) : [];
 const clientIceServers = buildIceServers({ host: HOST_IP, user: TURN_USER, pass: TURN_PASS });
 
+// 验证ICE servers配置
+console.log('[ICE Config] HOST_IP:', HOST_IP || '(not set)');
+console.log('[ICE Config] clientIceServers:', JSON.stringify(clientIceServers));
+
 // Pure: build the streamer page URL from cfg. Exported for unit testing.
 export function buildStreamerUrl(base, c) {
   const w = c.webrtc;

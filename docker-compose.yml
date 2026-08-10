@@ -24,6 +24,8 @@ services:
       - MAGPIE_TURN_USER=${MAGPIE_TURN_USER:-magpie}
       - MAGPIE_TURN_PASS=${MAGPIE_TURN_PASS:-magpie}
     restart: unless-stopped
+    depends_on:
+      - coturn
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s

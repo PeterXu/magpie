@@ -6,6 +6,13 @@
 <script>
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
+
+  // 时间戳辅助函数
+  function timestamp() {
+    const now = new Date();
+    return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+  }
+
   // Viewport + caps via query (?w=&h=&fps=&bitrate=&maxFps=&degradation=).
   const params = new URLSearchParams(location.search);
   const W = Number(params.get("w") || 1280);
@@ -56,8 +63,48 @@
 
   // Driven by Node via page.evaluate when a client offer arrives.
   window.relayOffer = async (offer, iceServers) => {
-    if (pc) { try { pc.close(); } catch {} }
+    // 先关闭旧连接，等待资源释放
+    if (pc) {
+      try {
+        // 停止所有track
+        const senders = pc.getSenders();
+        senders.forEach(s => {
+          try { if (s.track) s.track.stop(); } catch {}
+        });
+
+        // 移除事件监听器
+        pc.onicecandidate = null;
+        pc.onicegatheringstatechange = null;
+        pc.onconnectionstatechange = null;
+        pc.oniceconnectionstatechange = null;
+
+        pc.close();
+        // 延长等待时间到200ms，确保TURN deallocation完成
+        await new Promise(r => setTimeout(r, 200));
+        console.log(`[${timestamp()}] [Streamer] Old PC closed, ready for new connection`);
+      } catch (e) {
+        console.warn(`[${timestamp()}] [Streamer] Error closing old pc:`, e);
+      }
+    }
+
+    // 重新创建stream，避免使用ended的track
+    stream = canvas.captureStream(FPS);
+    console.log(`[${timestamp()}] [Streamer] Created new stream, tracks: ${stream.getVideoTracks().length}`);
+
     pc = new RTCPeerConnection({ iceServers: iceServers || [] });
+
+    // 监控ICE candidate收集
+    const candidates = { host: 0, stun: 0, turn: 0 };
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        const type = e.candidate.candidate.includes('typ relay') ? 'turn' :
+                     e.candidate.candidate.includes('typ srflx') ? 'stun' : 'host';
+        candidates[type]++;
+      } else {
+        console.log(`[${timestamp()}] [Streamer] ICE gathering complete: ${candidates.host} host, ${candidates.stun} stun, ${candidates.turn} turn`);
+      }
+    };
+
     const sender = pc.addTrack(stream.getVideoTracks()[0]);
     // Optional sender caps (maxBitrate/maxFramerate/degradationPreference).
     // Wrapped: browser/timing quirks must not break the offer — fall back to defaults.
@@ -74,10 +121,59 @@
     await pc.setRemoteDescription({ type: "offer", sdp: offer });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+
+    const startTime = Date.now();
+    // 智能ICE gathering策略：检测到STUN candidate就完成
     await new Promise((resolve) => {
-      const t = setTimeout(resolve, 3000);
-      pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); } };
+      let hasStunCandidate = false;
+      const maxWait = 5000; // 最长等待5秒（从10秒减少）
+      const minWait = 500;  // 最少等待500ms
+
+      const timer = setTimeout(() => {
+        if (!hasStunCandidate) {
+          console.warn(`[${timestamp()}] [Streamer] No STUN candidate after waiting`);
+        }
+        resolve();
+      }, maxWait);
+
+      const minTimer = setTimeout(() => {
+        if (hasStunCandidate) {
+          clearTimeout(timer);
+          resolve();
+        }
+      }, minWait);
+
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === "complete") {
+          clearTimeout(timer);
+          clearTimeout(minTimer);
+          resolve();
+        }
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          const type = e.candidate.candidate.includes('typ relay') ? 'turn' :
+                       e.candidate.candidate.includes('typ srflx') ? 'stun' : 'host';
+          candidates[type]++;
+          if (type === 'stun') {
+            hasStunCandidate = true;
+            setTimeout(() => {
+              clearTimeout(timer);
+              resolve();
+            }, 500);
+          }
+        }
+      };
     });
+
+    const elapsed = Date.now() - startTime;
+    const hasRelay = pc.localDescription.sdp.includes('typ relay');
+    console.log(`[${timestamp()}] [Streamer] ICE gathering: ${elapsed}ms, has relay: ${hasRelay}`);
+    if (!hasRelay && iceServers && iceServers.length > 0) {
+      console.warn(`[${timestamp()}] [Streamer] WARNING: TURN configured but no relay candidate`);
+    }
+
     return pc.localDescription.sdp;
   };
 
