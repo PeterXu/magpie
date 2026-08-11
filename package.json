@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "playwright": "^1.49.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "hono": "^4.7.0",
+    "@hono/node-server": "^1.13.0"
   }
 }

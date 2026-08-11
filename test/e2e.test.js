@@ -6,7 +6,9 @@ import { chromium } from "playwright";
 import { BrowserSession } from "../src/browser/BrowserSession.js";
 import { StreamerPeer } from "../src/streamer/StreamerPeer.js";
 import { InputChannel } from "../src/webrtc/InputChannel.js";
-import { createServer } from "../src/server.js";
+import { serve } from "@hono/node-server";
+import { createApp } from "../src/app.js";
+import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
 
 const FIXTURE = pathToFileURL(path.join(process.cwd(), "test", "fixtures", "click-target.html")).href;
 
@@ -16,9 +18,45 @@ async function boot() {
   await browserSession.start();
   const streamerPeer = new StreamerPeer({ browser });
   const inputChannel = new InputChannel({ browserSession, viewportProvider: browserSession });
-  const server = createServer({ browserSession, inputChannel, streamerPeer });
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${server.address().port}`;
+
+  // Create WebSocket manager
+  const wsManager = new WebSocketManager();
+
+  // Create Hono app
+  const { app, wsRoutes } = createApp({ browserSession, streamerPeer, inputChannel, clientIceServers: [], wsManager });
+
+  // Start server using Hono's serve function
+  const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
+
+  // Handle WebSocket upgrades
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+
+    for (const { wsServer, path } of wsRoutes) {
+      if (pathname === path) {
+        wsServer.handleUpgrade(request, socket, head, (ws) => {
+          wsServer.emit('connection', ws, request);
+        });
+        return;
+      }
+    }
+
+    socket.destroy();
+  });
+
+  // Wait for server to be ready
+  await new Promise((resolve) => {
+    server.on('listening', resolve);
+    // Timeout after 1 second if listening event doesn't fire
+    setTimeout(resolve, 100);
+  });
+
+  const address = server.address();
+  if (!address) {
+    throw new Error('Server not listening');
+  }
+
+  const base = `http://127.0.0.1:${address.port}`;
   await streamerPeer.start({ streamerUrl: `${base}/streamer.html?w=400&h=300` });
   await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
   return { browser, browserSession, streamerPeer, server, base };
@@ -29,8 +67,21 @@ test("e2e: client sees video and a click reaches the target page", async () => {
   const client = await ctx.browser.newPage({ viewport: { width: 500, height: 400 } });
   try {
     await client.goto(`${ctx.base}/`, { waitUntil: "domcontentloaded" });
+
+    // Switch to WebRTC panel (button is in this panel)
+    await client.click('[data-panel="webrtc"]');
+
+    // Click the connect button to establish WebSocket connection
+    await client.click('#connectBtn');
+
+    // Wait for connection status to show connected (status-dot gets .connected class)
+    await client.waitForSelector('.status-dot.connected', { timeout: 5000 });
+
     // Video should start playing.
     await client.waitForFunction(() => { const v = document.getElementById("v"); return v && v.videoWidth > 0; }, { timeout: 10000 });
+
+    // Wait a bit for WebRTC connection to fully establish
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // Click the fixture button center (160,130) in a 400x300 page, mapped through the displayed video.
     const rect = await client.locator("#v").boundingBox();

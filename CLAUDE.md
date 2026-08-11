@@ -218,9 +218,10 @@ up in a `finally`.
   comments explaining *why*, especially around CDP / WebRTC.
 - Keep pixel / coord / key / SDP logic **pure** so it's unit-testable
   (`coords.js`, `keys.js`, `ice-servers.js`); dispatch and IO live in classes.
-- **Only two runtime deps**: `playwright` and `ws`. Don't add a build step,
-  bundler, or TS layer without a strong reason — the design explicitly values
-  pure JS + no build.
+- **Four runtime deps**: `playwright`, `ws`, `hono`, `@hono/node-server`. The
+  `hono` + `@hono/node-server` pair provides a modern, type-safe HTTP framework
+  for Node.js deployment. Don't add a build step, bundler, or TS layer without a
+  strong reason — the design explicitly values pure JS + no build.
 
 ## Docker / TURN gotchas
 

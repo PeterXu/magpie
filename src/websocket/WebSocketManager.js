@@ -1,0 +1,39 @@
+/**
+ * WebSocketManager - Manages all WebSocket connections and provides broadcast functionality
+ *
+ * Maintains a set of active WebSocket connections and allows broadcasting
+ * messages to all connected clients. Used for crash notifications and
+ * other global events.
+ */
+export class WebSocketManager {
+  constructor() {
+    this.clients = new Set(); // Store all connected WebSocket instances
+  }
+
+  /**
+   * Add a WebSocket connection to the manager
+   * @param {WebSocket} ws - WebSocket connection instance
+   */
+  add(ws) {
+    this.clients.add(ws);
+    // Auto-remove on close
+    ws.on('close', () => this.clients.delete(ws));
+  }
+
+  /**
+   * Broadcast a message to all connected WebSocket clients
+   * @param {Object} obj - Message object to broadcast (will be JSON stringified)
+   */
+  broadcast(obj) {
+    const msg = JSON.stringify(obj);
+    for (const ws of this.clients) {
+      if (ws.readyState === ws.OPEN) {
+        try {
+          ws.send(msg);
+        } catch (e) {
+          // Ignore send errors - connection may have closed during iteration
+        }
+      }
+    }
+  }
+}

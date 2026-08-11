@@ -3,7 +3,8 @@ import { chromiumLaunchOptions } from "./browser/launch-options.js";
 import { BrowserSession } from "./browser/BrowserSession.js";
 import { StreamerPeer } from "./streamer/StreamerPeer.js";
 import { InputChannel } from "./webrtc/InputChannel.js";
-import { createServer } from "./server.js";
+import { createApp, serve } from "./app.js";
+import { WebSocketManager } from "./websocket/WebSocketManager.js";
 import { buildIceServers } from "./webrtc/ice-servers.js";
 import { loadConfig } from "./config.js";
 import { loadEnvFile } from "./env.js";
@@ -55,9 +56,32 @@ async function main() {
   const streamerPeer = new StreamerPeer({ browser });
   const inputChannel = new InputChannel({ browserSession, viewportProvider: browserSession });
 
-  const server = createServer({ browserSession, inputChannel, streamerPeer, clientIceServers });
-  await new Promise((r) => server.listen(PORT, HOST, r));
+  // Create WebSocket manager for broadcasting
+  const wsManager = new WebSocketManager();
+
+  // Create Hono app with all dependencies
+  const { app, wsRoutes } = createApp({ browserSession, streamerPeer, inputChannel, clientIceServers, wsManager });
+
+  // Start the server
+  const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST });
   const base = `http://127.0.0.1:${PORT}`;
+
+  // Handle WebSocket upgrades
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+
+    for (const { wsServer, path } of wsRoutes) {
+      if (pathname === path) {
+        wsServer.handleUpgrade(request, socket, head, (ws) => {
+          wsServer.emit('connection', ws, request);
+        });
+        return;
+      }
+    }
+
+    // No WebSocket route matched
+    socket.destroy();
+  });
 
   await streamerPeer.start({ streamerUrl: buildStreamerUrl(base, cfg), iceServers: serverIceServers });
 
@@ -67,20 +91,20 @@ async function main() {
   // URL-bar sync: every main-frame navigation in the remote page (Go,
   // back/forward/reload, or a passive link-click) broadcasts the new nav state
   // to all clients. See the BrowserSession framenavigated listener.
-  browserSession.onUrlChange = (nav) => server.broadcast({ t: "nav", ...nav });
+  browserSession.onUrlChange = (nav) => wsManager.broadcast({ t: "nav", ...nav });
 
   // Tab state broadcast: fire whenever pages are opened/closed/switched or
   // titles change. Clients render the tab bar from this.
-  browserSession.onTabsChange = (state) => server.broadcast({ t: "tabs", ...state });
+  browserSession.onTabsChange = (state) => wsManager.broadcast({ t: "tabs", ...state });
 
   // Handle clipboard changes from remote browser
   browserSession.onClipboardChange = (data) => {
-    server.broadcast({ t: "clipboard", text: data.text });
+    wsManager.broadcast({ t: "clipboard", text: data.text });
   };
 
   browserSession.onCrash = async () => {
     try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
-    server.broadcast({ t: "reload" });
+    wsManager.broadcast({ t: "reload" });
     try { await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data)); } catch (err) { console.error("onCrash: screencast restart failed", err); }
   };
 

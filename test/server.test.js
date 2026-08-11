@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocket } from "ws";
-import { createServer } from "../src/server.js";
+import { serve } from "@hono/node-server";
+import { createApp } from "../src/app.js";
+import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
 
 function startWithMocks() {
   const browserSession = {
@@ -20,8 +22,37 @@ function startWithMocks() {
   };
   const inputChannel = { handle: () => {} };
   const streamerPeer = { relayOffer: async () => "ANSWER-FROM-MOCK", setFrameSocket: () => {}, pushFrame: () => {}, stop: async () => {}, getSenderCodecs: () => ["av1", "vp9", "vp8", "h264"] };
-  const server = createServer({ browserSession, inputChannel, streamerPeer });
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, browserSession, port: server.address().port })));
+
+  // Create WebSocket manager
+  const wsManager = new WebSocketManager();
+
+  // Create Hono app
+  const { app, wsRoutes } = createApp({ browserSession, inputChannel, streamerPeer, clientIceServers: [], wsManager });
+
+  // Start server
+  const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
+
+  // Handle WebSocket upgrades
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+
+    for (const { wsServer, path } of wsRoutes) {
+      if (pathname === path) {
+        wsServer.handleUpgrade(request, socket, head, (ws) => {
+          wsServer.emit('connection', ws, request);
+        });
+        return;
+      }
+    }
+
+    socket.destroy();
+  });
+
+  return new Promise((resolve) => {
+    server.on('listening', () => {
+      resolve({ server, browserSession, port: server.address().port });
+    });
+  });
 }
 
 test("server: GET /healthz returns ok", async () => {

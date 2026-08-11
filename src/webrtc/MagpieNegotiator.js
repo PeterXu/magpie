@@ -193,6 +193,11 @@ export class MagpieNegotiator extends EventEmitter {
       await pc.setLocalDescription(offer);
       console.log('[MagpieNegotiator] Local description set');
 
+      // Store last offer for testing/verification
+      if (typeof window !== 'undefined') {
+        window._lastOffer = pc.localDescription.sdp;
+      }
+
       // Wait for ICE gathering to complete (magpie uses complete ICE gathering)
       if (options.waitForIceGathering !== false) {
         console.log('[MagpieNegotiator] Waiting for ICE gathering...');

@@ -6,7 +6,9 @@ import { chromium } from "playwright";
 import { BrowserSession } from "../src/browser/BrowserSession.js";
 import { StreamerPeer } from "../src/streamer/StreamerPeer.js";
 import { InputChannel } from "../src/webrtc/InputChannel.js";
-import { createServer } from "../src/server.js";
+import { serve } from "@hono/node-server";
+import { createApp } from "../src/app.js";
+import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
 
 const FIXTURE = pathToFileURL(path.join(process.cwd(), "test", "fixtures", "click-target.html")).href;
 
@@ -16,8 +18,37 @@ async function boot() {
   await browserSession.start();
   const streamerPeer = new StreamerPeer({ browser });
   const inputChannel = new InputChannel({ browserSession, viewportProvider: browserSession });
-  const server = createServer({ browserSession, inputChannel, streamerPeer });
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+
+  // Create WebSocket manager
+  const wsManager = new WebSocketManager();
+
+  // Create Hono app
+  const { app, wsRoutes } = createApp({ browserSession, streamerPeer, inputChannel, clientIceServers: [], wsManager });
+
+  // Start server
+  const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
+
+  // Handle WebSocket upgrades
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+
+    for (const { wsServer, path } of wsRoutes) {
+      if (pathname === path) {
+        wsServer.handleUpgrade(request, socket, head, (ws) => {
+          wsServer.emit('connection', ws, request);
+        });
+        return;
+      }
+    }
+
+    socket.destroy();
+  });
+
+  // Wait for server to be ready
+  await new Promise((resolve) => {
+    server.on('listening', resolve);
+  });
+
   const base = `http://127.0.0.1:${server.address().port}`;
   await streamerPeer.start({ streamerUrl: `${base}/streamer.html?w=400&h=300` });
   await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
