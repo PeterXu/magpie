@@ -2,311 +2,114 @@
 
 ## What is magpie
 
-Remote browser instance service: a single headless Chromium opened to a default
-URL (`about:blank`), streamed to a single remote user over WebRTC video.
-Mouse / keyboard / navigation round-trip back over a signaling WebSocket.
+Remote browser instance service: single headless Chromium streamed to a single remote user over WebRTC video, with mouse/keyboard/navigation control via WebSocket signaling.
 
-**Session model: single-instance, single-user, multi-tab.** One Chromium instance
-with multiple tabs, one active tab streamed at a time via WebRTC. Users can switch
-between tabs, open new tabs, and close tabs via the tab bar UI. v1 has no
-multi-session, no audio, no runtime resize.
+**Session model**: single-instance, single-user, multi-tab. One Chromium instance with multiple tabs, one active tab streamed at a time.
 
-**Authentication: single-admin-user, JWT-based, cookie-stored.** Simple authentication
-with one admin account (`MAGPIE_ADMIN_USER`/`MAGPIE_ADMIN_PASSWORD`). JWT tokens stored
-in both `localStorage` (for WebSocket) and cookie (for HTTP requests). Browser requests
-with valid cookie are authenticated; unauthenticated requests redirect to `/login.html`.
-API requests require `Authorization: Bearer <token>` header.
+**Authentication**: single-admin-user JWT authentication with cookie storage. Browser requests use cookie; API requests use `Authorization: Bearer <token>`; WebSocket uses `?token=<token>`.
 
 ## Commands
 
 ```bash
 npm install
-npx playwright install chromium   # download the browser once
-npm start                         # node src/index.js -> http://localhost:8080/
-npm test                          # node --test (unit + integration + spike + e2e)
+npx playwright install chromium
+npm start                         # http://localhost:8080/
+npm test                          # node --test
 ```
 
-Env: `src/env.js` auto-loads a `.env` file from the cwd at startup (real/shell
-env wins over the file; no new dep — the project stays at two). `.env.example`
-is the template. Defaults in `src/index.js` + `src/config.js`: `PORT` (8080), `HOST`
-(`0.0.0.0`; `127.0.0.1` for local-only), `MAGPIE_URL` (`about:blank`),
-`MAGPIE_NO_SANDBOX` (`1` only in Docker). Video/quality (all optional, additive —
-unset = current behavior): `MAGPIE_WIDTH`/`MAGPIE_HEIGHT` (1280/800),
-`MAGPIE_QUALITY` (80, jpeg 1-100), `MAGPIE_FPS` (10, drives
-`canvas.captureStream(fps)` on the streamer page — the real output-fps cap. It
-does NOT touch CDP: `Page.startScreencast`'s only rate param is `everyNthFrame`,
-a frame divisor that starves static pages when >1, so we leave it unset and CDP
-emits one JPEG per repaint), `MAGPIE_MAX_BITRATE` (adaptive default from viewport, ~2.5bps/px
-clamped [1.5M,8M]; `0`/`none`/`off` to disable; bps, accepts `2500k`/`2.5m`),
-`MAGPIE_MAX_FRAMERATE` (unset), `MAGPIE_DEGRADATION` (`maintain-resolution`;
-`maintain-resolution`/`maintain-framerate`/`balanced`). Video codec is
-auto-selected, not env-configurable: the client narrows its offer to the first
-codec in `[av1,vp9,vp8,h264]` that both magpie can encode and the client can
-decode (offerer-side, since the encoder follows the offer's m-line order).
+Environment: `src/env.js` auto-loads `.env` at startup. Key variables:
+- Server: `PORT`, `HOST`, `MAGPIE_URL`
+- Video: `MAGPIE_WIDTH`, `MAGPIE_HEIGHT`, `MAGPIE_QUALITY`, `MAGPIE_FPS`, `MAGPIE_MAX_BITRATE`, `MAGPIE_DEGRADATION`
+- Auth: `MAGPIE_ADMIN_USER`, `MAGPIE_ADMIN_PASSWORD`, `MAGPIE_JWT_SECRET`, `MAGPIE_JWT_EXPIRES_IN`
+- TURN: `MAGPIE_HOST_IP`, `MAGPIE_TURN_HOST`, `MAGPIE_TURN_USER`, `MAGPIE_TURN_PASS`
 
-Docker:
+Docker: **Do NOT auto-execute Docker commands. Prompt user to run them manually.**
 
 ```bash
-docker compose up -d                # magpie + coturn sibling service
-curl -s http://localhost:8080/healthz   # -> ok
+docker compose up -d
+curl -s http://localhost:8080/healthz
 docker compose down
 ```
 
-## Architecture — the pipeline is the whole point
+## Architecture
 
 ```
-target page ──CDP Page.startScreencast (JPEG)──▶ Node (BrowserSession)
-Node ──/internal WS (binary JPEG)──▶ streamer page (a second Chromium context)
-streamer page: createImageBitmap→drawImage→<canvas>→canvas.captureStream()
-            → page-side RTCPeerConnection (Chromium native libwebrtc) ──▶ client <video>
+target page ──CDP screencast──▶ Node ──/internal WS──▶ streamer page
+            ──canvas.captureStream()──▶ RTCPeerConnection ──▶ client <video>
 ```
 
-- **Video downlink** uses Chromium's *own* libwebrtc running inside the streamer
-  page — not a Node-side encoder. The `<canvas>` is only a relay/feeder for
-  libwebrtc; it is **not** the pixel source.
-- **Input / control** (`mouse`/`wheel`/`key`/`navigate`) travels over the
-  `/signaling` WS → Node → CDP. It does **not** go over WebRTC. WebRTC carries
-  video only (the client peer is recvonly).
+**Video**: CDP `Page.startScreencast` → Node → streamer page canvas → `captureStream()` → WebRTC. The canvas is only a relay; the actual encoder is Chromium's libwebrtc.
 
-### Why capture MUST be CDP (do not change this)
+**Why CDP**: Headless Chromium cannot use `getDisplayMedia()` (needs OS backend) or extensions (Playwright headless can't load them). Arbitrary sites need CDP screencast.
 
-Arbitrary sites are DOM, not a `<canvas>`; `canvas.captureStream()` only streams
-pixels *already drawn onto a canvas* — it cannot capture a website's rendered
-output. Under headless Chromium:
+**Input**: Mouse/keyboard/navigation over `/signaling` WebSocket → Node → CDP. WebRTC carries video only.
 
-- `getDisplayMedia()` needs an OS screen-capture backend → **unavailable**.
-- Playwright **headless cannot load extensions** → `chrome.tabCapture` is
-  **unavailable**.
-- headed + Xvfb violates the headless constraint.
+## Key Modules
 
-So headless + arbitrary-site pixels can only come from CDP
-`Page.startScreencast` → Node. If anyone proposes tabCapture / getDisplayMedia /
-an extension, this is why they're ruled out. Canonical design:
-`docs/superpowers/specs/2026-08-08-magpie-remote-browser-design.md`.
+| Module | Purpose |
+|--------|---------|
+| `src/index.js` | Entry point, shared browser lifecycle, crash→restart |
+| `src/browser/BrowserSession.js` | Multi-tab management, screencast, CDP input |
+| `src/streamer/StreamerPeer.js` | Streamer page management, WebRTC offer/answer |
+| `src/webrtc/InputChannel.js` | Parse input messages, coordinate mapping |
+| `src/routes/api/login.js` | Login endpoint, JWT generation, cookie setting |
+| `src/middleware/auth.js` | Authentication middleware (header/cookie), JWT verification |
+| `src/config.js` | Config loading, auth config, video parameter validation |
 
-## Module map
-
-| Path | Role |
-|---|---|
-| `src/index.js` | Entry. Launches ONE shared Playwright `browser`; wires BrowserSession + StreamerPeer + InputChannel + server; owns the crash→restart flow. |
-| `src/server.js` | `node:http` + `ws`. Serves `/`, `/client.html`, `/streamer.html`, `/healthz`. WS `/signaling` (client) and `/internal` (frame relay). `server.broadcast({t:'reload'})` on crash. Handles multi-tab messages (`switch-tab`, `close-tab`, `new-tab`). |
-| `src/browser/BrowserSession.js` | Target page: Playwright context + multi-tab management. `_pages` Map tracks all open tabs; `_activePageId` tracks the current screencast target. `startScreencast/dispatchMouse/dispatchWheel/dispatchKey/navigate/getViewport/getUrl/onCrash/restart`. Accepts an injected shared browser. |
-| `src/browser/launch-options.js` | **Single source** for Chromium launch flags — both `index.js` (shared browser) and `BrowserSession` (self-launch) call it. `MAGPIE_NO_SANDBOX=1` → `--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage` (avoids the 64MB container `/dev/shm` crash). |
-| `src/browser/blank-page.js` | HTML content for blank tabs. Pure CSS gradient background with magpie watermark logo. Used for initial `about:blank` and new tabs created by the user. |
-| `src/streamer/StreamerPeer.js` | Manages the streamer page in the shared browser (separate context). `relayOffer(sdp)→answerSdp` via `page.evaluate(window.relayOffer)`; `pushFrame(jpeg)` over the `/internal` socket. |
-| `src/streamer/streamer.html` | canvas + `captureStream(FPS)` (default 10, via `?fps=`) + page-side `RTCPeerConnection`; receives JPEG frames on `/internal`; applies sender caps from `?bitrate=&maxFps=&degradation=`. Codec selection happens client-side, not here. Sets `window.__ready=true`, exposes `window.__magpieCfg`. |
-| `src/webrtc/InputChannel.js` | Parses `/signaling` input msgs → maps coords → dispatches to BrowserSession. |
-| `src/webrtc/coords.js` | Pure: client `<video>` rect → page CSS coords (assumes no letterboxing; client video is `width:100%`). |
-| `src/webrtc/keys.js` | Pure: CDP key map (`key/code/windowsVirtualKeyCode/text`) + input-message parsing. |
-| `src/webrtc/ice-servers.js` | Builds STUN+TURN `iceServers` from a coturn host; returns `[]` when no host/creds (native run). |
-| `src/config.js` | Pure `loadConfig(env)` + `defaultBitrate`/`resolveMaxBitrate`: reads/validates `MAGPIE_*` video+quality env, never throws. Drives viewport, screencast opts, and WebRTC sender caps. |
-| `src/webrtc/codec-pick.js` | Pure `pickCodec(magpie, client, chain)`: first codec in `[av1,vp9,vp8,h264]` both sides support; used by the client to narrow the offer m-line. |
-| `src/public/client.html` | Client: `/signaling` WS + `RTCPeerConnection(recvonly)` + input capture. **UI Features:** Left navigation panel with "项目介绍" and "远程访问浏览器"; Manual connection control ("连接远程"/"停止远程" buttons); Connection status indicator (green/gray dot); lyrebird-inspired light theme. Tab bar UI rendered from `hello` and `tabs` messages. `?relay=1` forces `iceTransportPolicy:'relay'` (debug TURN). |
-
-### Wiring notes (easy to get wrong)
-
-- The WebRTC peer is the **streamer page**, not the client. The client is
-  recvonly. Two `RTCPeerConnection`s exist (one per side) but they peer with
-  each other through SDP relayed by Node.
-- Server-side peer (streamer page) reaches coturn by compose service name
-  `coturn`; client-side peer reaches it by the host IP. Both empty when
-  `MAGPIE_HOST_IP` is unset → pure host candidates. See `src/index.js`.
-- Client waits for `iceServers` in the `hello` message **before** starting the
-  peer — the TURN allocation is a round-trip, so the offer must include the
-  relay candidate.
-- WebRTC sender caps (`MAGPIE_MAX_BITRATE`/`MAGPIE_MAX_FRAMERATE`/
-  `MAGPIE_DEGRADATION`) apply **streamer-page-side** in `relayOffer` via
-  `RTCRtpSender.setParameters` — not on the (recvonly) client. They're threaded
-  as URL query params from `buildStreamerUrl`; the client peer is unaffected.
+**Important**: WebRTC peer is the streamer page (server-side), not the client (recvonly). Client waits for `iceServers` in `hello` message before starting peer.
 
 ## Testing
 
-`npm test` runs `node --test`, which picks up everything under `test/`. Layers:
+`npm test` runs `node --test`:
+- Unit: `test/webrtc/`, `test/browser/launch-options.test.js`
+- Integration: `test/browser/BrowserSession.*.test.js` (screencast, input, multi-tab)
+- E2E: `test/e2e.test.js` (full stack with real browser)
 
-- **Pure unit** — `test/webrtc/{coords,keys,ice-servers}.test.js`,
-  `test/browser/launch-options.test.js`.
-- **Integration** — `test/browser/BrowserSession.*.test.js`: screencast frames,
-  CDP input injection against `test/fixtures/click-target.html`, crash→restart,
-  multi-tab operations (switch/close/new).
-- **Concurrency** — `test/browser/BrowserSession.concurrent.test.js`: verifies
-  race condition protection for rapid tab creation.
-- **Spike** — `test/spike.capturestream.test.js`: proves headless
-  `canvas.captureStream()` actually yields video (the biggest design risk; was
-  an early gate task).
-- **E2E** — `test/e2e.test.js`: boots the whole stack, drives a real Chromium as
-  the client, asserts video plays and a click reaches the target page.
+Tests use `node:test` + `node:assert/strict`. Tests mutating `process.env` must clean up in `finally`.
 
-Tests use `node:test` + `node:assert/strict`; boot helpers inject a shared
-`browser`. Tests that mutate `process.env` (e.g. `MAGPIE_NO_SANDBOX`) must clean
-up in a `finally`.
+## Authentication
 
-## Multi-tab implementation
+**Flow**:
+- Browser: cookie → authenticated or redirect to `/login.html`
+- API: `Authorization: Bearer <token>` header → 401 if invalid
+- WebSocket: `?token=<token>` query parameter → reject if invalid
 
-**Architecture**:
-- `_pages` Map stores all open pages: `pageId → { page, cdp, title, url }`
-- `_activePageId` tracks which page is currently being screencast
-- `context.on('page')` captures all new pages (including `target="_blank"`)
-- Single WebRTC stream switches between tabs on demand
+**Implementation**:
+- Login endpoint (`/api/login`) validates credentials, generates JWT, sets cookie
+- Cookie stored token allows seamless browser authentication
+- Middleware checks `Authorization` header first, falls back to cookie
+- Empty `MAGPIE_ADMIN_PASSWORD` disables auth (test mode)
 
-**Tab operations**:
-- `newPage()`: Creates blank tab with magpie watermark, auto-switches to it
-- `switchPage(pageId)`: Switches screencast target, broadcasts URL change
-- `closePage(pageId)`: Closes tab, switches to last remaining tab
-- Race condition protection via `_newPageInProgress` lock
+## Multi-tab
 
-**Client UI**:
-- Tab bar rendered from `{t:'tabs', pages, activeId}` messages
-- Each tab shows title and close button
-- "+" button creates new tabs (with concurrency protection)
+- `_pages` Map: `pageId → { page, cdp, title, url }`
+- `_activePageId`: current screencast target
+- Operations: `newPage()`, `switchPage()`, `closePage()` with race condition protection
+- Client tab bar renders from `{t:'tabs', ...}` messages
 
-**Screencast switching**:
-- Old tab: `Page.stopScreencast`, remove listeners
-- New tab: `Page.startScreencast`, wire frame handlers
-- Automatic on tab switch and close
+## Client Features
 
-## User authentication implementation
+- Left navigation panel (项目介绍 / 远程访问浏览器)
+- Manual connection control with status indicator
+- Tab bar UI with close buttons
+- Clipboard support: Ctrl+C/V/X/A sync between local and remote
 
-**Architecture**:
-- Single admin account configured via environment variables
-- JWT tokens signed with HS256, 24-hour expiry (configurable)
-- Dual storage: cookie for HTTP requests, localStorage for WebSocket
+## Code Conventions
 
-**Environment configuration** (`.env`):
-```bash
-MAGPIE_ADMIN_USER=admin
-MAGPIE_ADMIN_PASSWORD=<required>
-MAGPIE_JWT_SECRET=<required>
-MAGPIE_JWT_EXPIRES_IN=86400
-```
+- ESM, explicit `.js` extensions, no build step
+- Plain JS classes with `_`-prefixed private fields
+- Pure functions for testable logic (coords, keys, SDP)
+- **Four runtime deps**: `playwright`, `ws`, `hono`, `@hono/node-server`
 
-**Authentication flow**:
-- Browser request → cookie check → authenticated or redirect to login
-- API request → `Authorization: Bearer <token>` header check → 401 if invalid
-- WebSocket connection → `?token=<token>` query parameter check → reject if invalid
+## Docker Notes
 
-**Cookie-based authentication** (for browsers):
-- Login endpoint sets `Set-Cookie: token=<jwt>` with 24-hour expiry
-- Browser automatically sends cookie with subsequent requests
-- Auth middleware checks cookie when `Authorization` header absent
-- Enables seamless browser authentication without manual token handling
+- `shm_size: 2gb` required (default 64MB crashes Chromium)
+- macOS Docker: WebRTC video won't reach Mac browser (container ICE unroutable)
+- TURN relay needed for non-same-host clients
+- `docker compose` auto-loads `.env` into container
 
-**Key files**:
-- `src/routes/api/login.js`: Login endpoint, validates credentials, generates JWT, sets cookie
-- `src/middleware/auth.js`: Authentication middleware, checks header or cookie, verifies JWT
-- `src/public/login.html`: Login page with form submission, stores token in localStorage
-- `src/config.js`: `loadAuthConfig()` reads auth environment variables
+## Docs
 
-**Security considerations**:
-- Empty `MAGPIE_ADMIN_PASSWORD` disables authentication (test mode only)
-- Token payload: `{ sub, role, iat }` — no sensitive data
-- WebSocket authentication via URL parameter (browser limitation)
-- Automatic redirect for unauthenticated browser requests
-
-## Client UI implementation
-
-**Left navigation panel**:
-- Position: fixed, 200px width, white background
-- Logo area: 44px height with "magpie" text
-- Navigation items: "📋 项目介绍" and "🌐 远程访问浏览器"
-- Active state: Purple left border (#5a57c4), semi-transparent background
-
-**Panel switching**:
-- Intro panel: Welcome page with feature cards (remote browser, multi-tab, session persistence, lightweight deployment)
-- WebRTC panel: Remote browser control interface
-- State preservation: Switching panels does NOT disconnect WebSocket/WebRTC
-
-**Connection control**:
-- Manual connection: "连接远程" button to establish connection
-- Manual disconnect: "停止远程" button to close connection
-- Connection status: Green dot (connected) / Gray dot (disconnected)
-- State management: `isConnected` flag controls auto-reconnect on WebSocket close
-
-**WebRTC lifecycle**:
-- Default: No connection on page load
-- Connect: Creates WebSocket → receives hello → starts RTCPeerConnection
-- Disconnect: Thoroughly cleans up event listeners, closes connections, clears caches
-- Reconnect: Safe after disconnect due to proper cleanup (fixes connect→disconnect→reconnect failure)
-
-**Design inspiration**:
-- Light theme (#f8f9fa background)
-- Purple accent color (#5a57c4, matching lyrebird)
-- 44px header height (standard Material Design)
-- Shadows and hover effects for interactivity
-
-## Clipboard support implementation
-
-**Clipboard shortcuts**:
-- Copy (Ctrl/Command+C): Reads remote clipboard and syncs to local
-- Paste (Ctrl/Command+V): Reads local clipboard and inserts to remote
-- Cut (Ctrl/Command+X): Reads remote clipboard (with cut operation) and syncs to local
-- Select all (Ctrl/Command+A): Passes through to remote browser
-
-**Technical flow**:
-- Client intercepts clipboard shortcuts before they reach the browser
-- `getModifiers(e)` calculates correct modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8)
-- Paste: Read local clipboard via `navigator.clipboard.readText()`, send `{t:"paste", text:"..."}` to server
-- Copy: Send `{t:"copy", cut:boolean}` to server, server reads remote clipboard via CDP, sends `{t:"clipboard", text:"..."}` back
-- Server uses `Input.insertText` CDP API for pasting, `Runtime.evaluate` for reading remote clipboard
-
-**Security considerations**:
-- Requires clipboard-read permission on client
-- Text length limited to 100KB on server
-- HTTPS required for clipboard API in production
-- Graceful degradation if clipboard API unavailable
-
-## Code conventions
-
-- ESM (`"type":"module"`), explicit `.js` extensions in imports, **no build
-  step**, no TypeScript.
-- Plain JS classes with `_`-prefixed private fields (no `#`). Dense `//`
-  comments explaining *why*, especially around CDP / WebRTC.
-- Keep pixel / coord / key / SDP logic **pure** so it's unit-testable
-  (`coords.js`, `keys.js`, `ice-servers.js`); dispatch and IO live in classes.
-- **Four runtime deps**: `playwright`, `ws`, `hono`, `@hono/node-server`. The
-  `hono` + `@hono/node-server` pair provides a modern, type-safe HTTP framework
-  for Node.js deployment. Don't add a build step, bundler, or TS layer without a
-  strong reason — the design explicitly values pure JS + no build.
-
-## Docker / TURN gotchas
-
-**IMPORTANT**: Do NOT automatically execute Docker commands. When Docker operations are needed, prompt the user to run them manually. This prevents unintended container management and allows user oversight of Docker operations.
-
-- `shm_size: 2gb` is required for Chromium stability (the default 64MB
-  `/dev/shm` crashes it).
-- `docker compose` auto-loads the host `.env` into the magpie container
-  (`env_file` with `required:false` — no error if `.env` is absent). The
-  `environment:` block still wins, so Docker-essential values
-  (`MAGPIE_NO_SANDBOX=1`, `HOST`, `PORT`) stay fixed; everything else
-  (video/quality, `MAGPIE_HOST_IP`) comes from `.env`. Native (`npm start`)
-  loads `.env` via `src/env.js` instead.
-- **macOS Docker Desktop**: the page loads and signaling works, but WebRTC
-  video will NOT reach a Mac browser — container ICE candidates live in the
-  Docker VM, unroutable from macOS. Verify the pipeline from the CLI with
-  `docker/verify-webrtc.mjs` (expects `VIDEO_OK`), or use a TURN relay / Linux
-  host networking.
-- TURN relay (for non-same-host clients): set `MAGPIE_HOST_IP` to the host's LAN
-  IP (must be reachable from both the browser and the container).
-  `MAGPIE_TURN_USER`/`MAGPIE_TURN_PASS` default to `magpie`/`magpie`.
-- Keep the `playwright` version in `package-lock.json` matching what
-  `npx playwright install` downloads into the image.
-
-## Docs & workflow
-
-- Canonical architecture + rationale:
-  `docs/superpowers/specs/2026-08-08-magpie-remote-browser-design.md`.
-- Comparison with neko (self-hosted virtual desktop):
-  `docs/superpowers/2026-08-08-magpie-vs-neko.md`.
-- Implementation plans live in `docs/superpowers/plans/`
-  (`remote-browser`, `docker`, `turn`).
-- This project follows the `superpowers` workflow (brainstorm → spec → plan →
-  implement). New features should get a spec + plan in `docs/superpowers/`
-  before code.
-
-## Reference implementations
-
-The `lyrebird` and `mitmproxy` to reference projects for planned features:
-
-- **lyrebird**: HTTP API recording and traffic inspection (inspired UI design)
-- **mitmproxy**: Traffic interception and manipulation
-
-These are development references only, not part of the magpie runtime.
+- Architecture: `docs/superpowers/specs/2026-08-08-magpie-remote-browser-design.md`
+- Plans: `docs/superpowers/plans/`
+- Workflow: brainstorm → spec → plan → implement
