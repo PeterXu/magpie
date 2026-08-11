@@ -94,3 +94,14 @@ export function loadConfig(env = process.env) {
     },
   };
 }
+
+// Auth config loader: reads MAGPIE_ADMIN_* env, returns structured auth cfg.
+// Never throws: missing/invalid values fall back to safe defaults.
+export function loadAuthConfig(env = process.env) {
+  return {
+    adminUser: env.MAGPIE_ADMIN_USER || "admin",
+    adminPassword: env.MAGPIE_ADMIN_PASSWORD || "",
+    jwtSecret: env.MAGPIE_JWT_SECRET || "",
+    jwtExpiresIn: parseInt(env.MAGPIE_JWT_EXPIRES_IN || "86400", 10)
+  };
+}

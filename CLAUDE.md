@@ -9,7 +9,13 @@ Mouse / keyboard / navigation round-trip back over a signaling WebSocket.
 **Session model: single-instance, single-user, multi-tab.** One Chromium instance
 with multiple tabs, one active tab streamed at a time via WebRTC. Users can switch
 between tabs, open new tabs, and close tabs via the tab bar UI. v1 has no
-multi-session, no auth, no audio, no runtime resize.
+multi-session, no audio, no runtime resize.
+
+**Authentication: single-admin-user, JWT-based, cookie-stored.** Simple authentication
+with one admin account (`MAGPIE_ADMIN_USER`/`MAGPIE_ADMIN_PASSWORD`). JWT tokens stored
+in both `localStorage` (for WebSocket) and cookie (for HTTP requests). Browser requests
+with valid cookie are authenticated; unauthenticated requests redirect to `/login.html`.
+API requests require `Authorization: Bearer <token>` header.
 
 ## Commands
 
@@ -158,6 +164,44 @@ up in a `finally`.
 - New tab: `Page.startScreencast`, wire frame handlers
 - Automatic on tab switch and close
 
+## User authentication implementation
+
+**Architecture**:
+- Single admin account configured via environment variables
+- JWT tokens signed with HS256, 24-hour expiry (configurable)
+- Dual storage: cookie for HTTP requests, localStorage for WebSocket
+
+**Environment configuration** (`.env`):
+```bash
+MAGPIE_ADMIN_USER=admin
+MAGPIE_ADMIN_PASSWORD=<required>
+MAGPIE_JWT_SECRET=<required>
+MAGPIE_JWT_EXPIRES_IN=86400
+```
+
+**Authentication flow**:
+- Browser request → cookie check → authenticated or redirect to login
+- API request → `Authorization: Bearer <token>` header check → 401 if invalid
+- WebSocket connection → `?token=<token>` query parameter check → reject if invalid
+
+**Cookie-based authentication** (for browsers):
+- Login endpoint sets `Set-Cookie: token=<jwt>` with 24-hour expiry
+- Browser automatically sends cookie with subsequent requests
+- Auth middleware checks cookie when `Authorization` header absent
+- Enables seamless browser authentication without manual token handling
+
+**Key files**:
+- `src/routes/api/login.js`: Login endpoint, validates credentials, generates JWT, sets cookie
+- `src/middleware/auth.js`: Authentication middleware, checks header or cookie, verifies JWT
+- `src/public/login.html`: Login page with form submission, stores token in localStorage
+- `src/config.js`: `loadAuthConfig()` reads auth environment variables
+
+**Security considerations**:
+- Empty `MAGPIE_ADMIN_PASSWORD` disables authentication (test mode only)
+- Token payload: `{ sub, role, iat }` — no sensitive data
+- WebSocket authentication via URL parameter (browser limitation)
+- Automatic redirect for unauthenticated browser requests
+
 ## Client UI implementation
 
 **Left navigation panel**:
@@ -224,6 +268,8 @@ up in a `finally`.
   strong reason — the design explicitly values pure JS + no build.
 
 ## Docker / TURN gotchas
+
+**IMPORTANT**: Do NOT automatically execute Docker commands. When Docker operations are needed, prompt the user to run them manually. This prevents unintended container management and allows user oversight of Docker operations.
 
 - `shm_size: 2gb` is required for Chromium stability (the default 64MB
   `/dev/shm` crashes it).

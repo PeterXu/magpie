@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>magpie - 登录</title>
+  <style>
+    /* ===== lyrebird-inspired design ===== */
+    html, body { margin: 0; height: 100%; background: #f8f9fa; }
+    body { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+           font-size: 14px; color: #333; }
+
+    /* ===== Left Navigation Panel (lyrebird style) ===== */
+    #left-panel {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 200px;
+      height: 100vh;
+      background: #fff;
+      border-right: 1px solid #e8e8e8;
+      box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+      display: flex;
+      flex-direction: column;
+      z-index: 10;
+    }
+
+    /* Logo area */
+    .logo-area {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      border-bottom: 1px solid #f0f0f0;
+      background: #fff;
+    }
+
+    .logo-text {
+      font-size: 18px;
+      font-weight: 600;
+      color: #5a57c4;
+      letter-spacing: 1px;
+    }
+
+    /* ===== Right Body Container ===== */
+    #right-body {
+      margin-left: 200px;
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      height: 100vh;
+      background: #f8f9fa;
+    }
+
+    /* ===== Login Panel ===== */
+    #login-panel {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    }
+
+    .login-card {
+      background: #fff;
+      border: 1px solid #e8e8e8;
+      border-radius: 8px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .login-logo {
+      font-size: 36px;
+      font-weight: 600;
+      color: #5a57c4;
+      letter-spacing: 4px;
+      margin-bottom: 8px;
+    }
+
+    .login-title {
+      font-size: 18px;
+      color: #2c3e50;
+      margin: 0;
+      font-weight: 500;
+    }
+
+    .login-description {
+      font-size: 13px;
+      color: #8892b0;
+      margin-top: 8px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #515a6e;
+      margin-bottom: 8px;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 14px;
+      border: 1px solid #d9dade;
+      border-radius: 4px;
+      background: #fff;
+      color: #333;
+      transition: border-color 0.2s;
+      box-sizing: border-box;
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: #5a57c4;
+      box-shadow: 0 0 0 3px rgba(90, 87, 196, 0.1);
+    }
+
+    .form-input::placeholder {
+      color: #c0c4cc;
+    }
+
+    .login-button {
+      width: 100%;
+      background: #5a57c4;
+      color: #fff;
+      border: none;
+      padding: 12px 24px;
+      font-size: 15px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-weight: 500;
+      box-shadow: 0 2px 8px rgba(90, 87, 196, 0.3);
+      margin-top: 8px;
+    }
+
+    .login-button:hover {
+      background: #6a67d4;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(90, 87, 196, 0.4);
+    }
+
+    .login-button:active {
+      transform: translateY(0);
+    }
+
+    .login-button:disabled {
+      background: #c0c4cc;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .error-message {
+      background: #fef0f0;
+      border: 1px solid #fde2e2;
+      color: #f56c6c;
+      padding: 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .error-message.show {
+      display: block;
+    }
+
+    .register-link {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 13px;
+      color: #8892b0;
+    }
+
+    .register-link a {
+      color: #5a57c4;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .register-link a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div id="left-panel">
+    <!-- Logo area -->
+    <div class="logo-area">
+      <div class="logo-text">magpie</div>
+    </div>
+  </div>
+
+  <div id="right-body">
+    <!-- Login Panel -->
+    <div id="login-panel">
+      <div class="login-card">
+        <div class="login-header">
+          <div class="login-logo">magpie</div>
+          <h1 class="login-title">登录</h1>
+          <p class="login-description">远程浏览器实例服务</p>
+        </div>
+
+        <div id="errorMessage" class="error-message"></div>
+
+        <form id="loginForm">
+          <div class="form-group">
+            <label class="form-label" for="username">用户名</label>
+            <input
+              type="text"
+              id="username"
+              name="username"
+              class="form-input"
+              placeholder="请输入用户名"
+              required
+              autocomplete="username"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="password">密码</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              class="form-input"
+              placeholder="请输入密码"
+              required
+              autocomplete="current-password"
+            />
+          </div>
+
+          <button type="submit" class="login-button" id="loginButton">登录</button>
+        </form>
+
+        <div class="register-link">
+          还没有账号？<a href="/register.html">立即注册</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const loginButton = document.getElementById('loginButton');
+    const errorMessage = document.getElementById('errorMessage');
+
+    // Show error message
+    function showError(message) {
+      errorMessage.textContent = message;
+      errorMessage.classList.add('show');
+    }
+
+    // Hide error message
+    function hideError() {
+      errorMessage.textContent = '';
+      errorMessage.classList.remove('show');
+    }
+
+    // Handle form submission
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+
+      // Validate inputs
+      if (!username) {
+        showError('请输入用户名');
+        usernameInput.focus();
+        return;
+      }
+
+      if (!password) {
+        showError('请输入密码');
+        passwordInput.focus();
+        return;
+      }
+
+      // Disable button during submission
+      loginButton.disabled = true;
+      loginButton.textContent = '登录中...';
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+
+          // Store token and user info
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
+
+          // Redirect to main page
+          window.location.href = '/';
+        } else {
+          const error = await res.json();
+          showError(error.error || '登录失败，请重试');
+        }
+      } catch (err) {
+        console.error('Login error:', err);
+        showError('网络错误，请稍后重试');
+      } finally {
+        loginButton.disabled = false;
+        loginButton.textContent = '登录';
+      }
+    });
+
+    // Clear error when user starts typing
+    usernameInput.addEventListener('input', hideError);
+    passwordInput.addEventListener('input', hideError);
+
+    // Focus on username field
+    usernameInput.focus();
+  </script>
+</body>
+</html>

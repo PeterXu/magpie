@@ -29,6 +29,10 @@ services:
       - MAGPIE_TURN_HOST=${MAGPIE_TURN_HOST:-iceturn}
       - MAGPIE_TURN_USER=${MAGPIE_TURN_USER:-magpie}
       - MAGPIE_TURN_PASS=${MAGPIE_TURN_PASS:-magpie}
+      - MAGPIE_ADMIN_USER=${MAGPIE_ADMIN_USER:-admin}
+      - MAGPIE_ADMIN_PASSWORD=${MAGPIE_ADMIN_PASSWORD:-pass123}
+      - MAGPIE_JWT_SECRET=${MAGPIE_JWT_SECRET:-random-string}
+      - MAGPIE_JWT_EXPIRES_IN=${MAGPIE_JWT_EXPIRES_IN:-86400}
     restart: unless-stopped
     depends_on:
       iceturn:

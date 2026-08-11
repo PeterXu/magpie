@@ -9,6 +9,7 @@ import { InputChannel } from "../src/webrtc/InputChannel.js";
 import { serve } from "@hono/node-server";
 import { createApp } from "../src/app.js";
 import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
+import { Jwt } from 'hono/utils/jwt';
 
 const FIXTURE = pathToFileURL(path.join(process.cwd(), "test", "fixtures", "click-target.html")).href;
 
@@ -22,8 +23,20 @@ async function boot() {
   // Create WebSocket manager
   const wsManager = new WebSocketManager();
 
-  // Create Hono app
-  const { app, wsRoutes } = createApp({ browserSession, streamerPeer, inputChannel, clientIceServers: [], wsManager });
+  // Create Hono app with empty auth config (no auth required for e2e tests)
+  const { app, wsRoutes } = createApp({
+    browserSession,
+    streamerPeer,
+    inputChannel,
+    clientIceServers: [],
+    wsManager,
+    env: {
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: '',  // Empty password disables auth
+      JWT_SECRET: 'test-secret',
+      JWT_EXPIRES_IN: 86400
+    }
+  });
 
   // Start server
   const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
@@ -55,9 +68,25 @@ async function boot() {
   return { browser, browserSession, streamerPeer, inputChannel, server, base };
 }
 
+/**
+ * Generate a test JWT token and set it in localStorage using addInitScript
+ */
+async function setupTestAuth(page, token) {
+  // Add init script to set token before page loads
+  await page.addInitScript((t) => {
+    localStorage.setItem('token', t);
+  }, token);
+}
+
 test("e2e clipboard: connection and status indicator", async () => {
   const ctx = await boot();
   const client = await ctx.browser.newPage({ viewport: { width: 500, height: 400 } });
+
+  // Generate test token and setup auth
+  const testPayload = { sub: 'test-user', role: 'admin', iat: Math.floor(Date.now() / 1000) };
+  const testToken = await Jwt.sign(testPayload, 'test-secret');
+  await setupTestAuth(client, testToken);
+
   try {
     await client.goto(`${ctx.base}/`, { waitUntil: "domcontentloaded" });
 
@@ -115,6 +144,12 @@ test("e2e clipboard: connection and status indicator", async () => {
 test("e2e clipboard: paste message handled by server", async () => {
   const ctx = await boot();
   const client = await ctx.browser.newPage({ viewport: { width: 500, height: 400 } });
+
+  // Generate test token and setup auth
+  const testPayload = { sub: 'test-user', role: 'admin', iat: Math.floor(Date.now() / 1000) };
+  const testToken = await Jwt.sign(testPayload, 'test-secret');
+  await setupTestAuth(client, testToken);
+
   try {
     await client.goto(`${ctx.base}/`, { waitUntil: "domcontentloaded" });
     // Switch to WebRTC panel
@@ -265,6 +300,12 @@ test("e2e clipboard: copy message triggers clipboard callback", async () => {
 test("e2e clipboard: disconnect and reconnect", async () => {
   const ctx = await boot();
   const client = await ctx.browser.newPage({ viewport: { width: 500, height: 400 } });
+
+  // Generate test token and setup auth
+  const testPayload = { sub: 'test-user', role: 'admin', iat: Math.floor(Date.now() / 1000) };
+  const testToken = await Jwt.sign(testPayload, 'test-secret');
+  await setupTestAuth(client, testToken);
+
   try {
     await client.goto(`${ctx.base}/`, { waitUntil: "domcontentloaded" });
     // Switch to WebRTC panel

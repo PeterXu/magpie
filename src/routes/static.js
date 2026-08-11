@@ -37,6 +37,11 @@ app.get('/client.html', async (c) => {
   return serveStaticFile(c, filePath, 'text/html; charset=utf-8');
 });
 
+app.get('/login.html', async (c) => {
+  const filePath = path.join(PUBLIC_DIR, 'login.html');
+  return serveStaticFile(c, filePath, 'text/html; charset=utf-8');
+});
+
 app.get('/streamer.html', async (c) => {
   const filePath = path.join(STREAMER_DIR, 'streamer.html');
   return serveStaticFile(c, filePath, 'text/html; charset=utf-8');

@@ -26,8 +26,20 @@ function startWithMocks() {
   // Create WebSocket manager
   const wsManager = new WebSocketManager();
 
-  // Create Hono app
-  const { app, wsRoutes } = createApp({ browserSession, inputChannel, streamerPeer, clientIceServers: [], wsManager });
+  // Create Hono app with empty auth config (no auth required for tests)
+  const { app, wsRoutes } = createApp({
+    browserSession,
+    inputChannel,
+    streamerPeer,
+    clientIceServers: [],
+    wsManager,
+    env: {
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: '',  // Empty password disables auth
+      JWT_SECRET: 'test-secret',
+      JWT_EXPIRES_IN: 86400
+    }
+  });
 
   // Start server
   const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });

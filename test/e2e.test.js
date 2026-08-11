@@ -9,6 +9,7 @@ import { InputChannel } from "../src/webrtc/InputChannel.js";
 import { serve } from "@hono/node-server";
 import { createApp } from "../src/app.js";
 import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
+import { Jwt } from 'hono/utils/jwt';
 
 const FIXTURE = pathToFileURL(path.join(process.cwd(), "test", "fixtures", "click-target.html")).href;
 
@@ -22,8 +23,20 @@ async function boot() {
   // Create WebSocket manager
   const wsManager = new WebSocketManager();
 
-  // Create Hono app
-  const { app, wsRoutes } = createApp({ browserSession, streamerPeer, inputChannel, clientIceServers: [], wsManager });
+  // Create Hono app with empty auth config (no auth required for e2e tests)
+  const { app, wsRoutes } = createApp({
+    browserSession,
+    streamerPeer,
+    inputChannel,
+    clientIceServers: [],
+    wsManager,
+    env: {
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: '',  // Empty password disables auth
+      JWT_SECRET: 'test-secret',
+      JWT_EXPIRES_IN: 86400
+    }
+  });
 
   // Start server using Hono's serve function
   const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
@@ -65,6 +78,16 @@ async function boot() {
 test("e2e: client sees video and a click reaches the target page", async () => {
   const ctx = await boot();
   const client = await ctx.browser.newPage({ viewport: { width: 500, height: 400 } });
+
+  // Generate a test token for authentication
+  const testPayload = { sub: 'test-user', role: 'admin', iat: Math.floor(Date.now() / 1000) };
+  const testToken = await Jwt.sign(testPayload, 'test-secret');
+
+  // Add init script to set token before page loads
+  await client.addInitScript((token) => {
+    localStorage.setItem('token', token);
+  }, testToken);
+
   try {
     await client.goto(`${ctx.base}/`, { waitUntil: "domcontentloaded" });
 

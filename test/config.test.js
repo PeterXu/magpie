@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, defaultBitrate, resolveMaxBitrate } from "../src/config.js";
+import { loadConfig, defaultBitrate, resolveMaxBitrate, loadAuthConfig } from "../src/config.js";
 
 test("loadConfig: defaults when env empty", () => {
   const c = loadConfig({});
@@ -96,4 +96,26 @@ test("loadConfig: MAGPIE_DEGRADATION enum + flipped default", () => {
   assert.equal(loadConfig({ MAGPIE_DEGRADATION: "maintain-framerate" }).webrtc.degradation, "maintain-framerate");
   assert.equal(loadConfig({}).webrtc.degradation, "maintain-resolution");               // new default
   assert.equal(loadConfig({ MAGPIE_DEGRADATION: "foo" }).webrtc.degradation, "maintain-resolution"); // bad -> default
+});
+
+// Auth config tests
+test("loadAuthConfig returns default values when env is empty", () => {
+  const config = loadAuthConfig({});
+  assert.equal(config.adminUser, "admin");
+  assert.equal(config.adminPassword, "");
+  assert.equal(config.jwtSecret, "");
+  assert.equal(config.jwtExpiresIn, 86400);
+});
+
+test("loadAuthConfig reads values from env", () => {
+  const config = loadAuthConfig({
+    MAGPIE_ADMIN_USER: "testuser",
+    MAGPIE_ADMIN_PASSWORD: "testpass",
+    MAGPIE_JWT_SECRET: "testsecret",
+    MAGPIE_JWT_EXPIRES_IN: "3600"
+  });
+  assert.equal(config.adminUser, "testuser");
+  assert.equal(config.adminPassword, "testpass");
+  assert.equal(config.jwtSecret, "testsecret");
+  assert.equal(config.jwtExpiresIn, 3600);
 });

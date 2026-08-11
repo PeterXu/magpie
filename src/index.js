@@ -6,7 +6,7 @@ import { InputChannel } from "./webrtc/InputChannel.js";
 import { createApp, serve } from "./app.js";
 import { WebSocketManager } from "./websocket/WebSocketManager.js";
 import { buildIceServers } from "./webrtc/ice-servers.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadAuthConfig } from "./config.js";
 import { loadEnvFile } from "./env.js";
 import { fileURLToPath } from "node:url";
 
@@ -59,8 +59,24 @@ async function main() {
   // Create WebSocket manager for broadcasting
   const wsManager = new WebSocketManager();
 
+  // Load auth config and prepare env
+  const authConfig = loadAuthConfig();
+  const env = {
+    ADMIN_USER: authConfig.adminUser,
+    ADMIN_PASSWORD: authConfig.adminPassword,
+    JWT_SECRET: authConfig.jwtSecret,
+    JWT_EXPIRES_IN: authConfig.jwtExpiresIn
+  };
+
   // Create Hono app with all dependencies
-  const { app, wsRoutes } = createApp({ browserSession, streamerPeer, inputChannel, clientIceServers, wsManager });
+  const { app, wsRoutes } = createApp({
+    browserSession,
+    streamerPeer,
+    inputChannel,
+    clientIceServers,
+    wsManager,
+    env
+  });
 
   // Start the server
   const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST });

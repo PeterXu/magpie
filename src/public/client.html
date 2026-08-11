@@ -528,6 +528,14 @@
   <script type="module">
     import { pickCodec } from "/codec-pick.js";
     import { MagpiePeer } from "/MagpiePeer.js";
+
+    // ===== Token Verification =====
+    const token = localStorage.getItem('token');
+    if (!token) {
+      window.location.href = '/login.html';
+      throw new Error('No token, redirecting to login');
+    }
+
     const video = document.getElementById("v");
     const urlInput = document.getElementById("url");
     const goBtn = document.getElementById("go");
@@ -630,9 +638,13 @@
       try {
         console.log(`[${timestamp()}] [Client] Connecting...`);
 
+        // Create WebSocket URL with token parameter
+        const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${location.host}/signaling?token=${encodeURIComponent(token)}`;
+
         // Create new peer with signaling URL
         peer = new MagpiePeer({
-          url: location.origin.replace(/^http/, "ws") + "/signaling",
+          url: wsUrl,
           reconnectInterval: 1000,
           maxReconnectAttempts: 5
         });
@@ -671,6 +683,15 @@
 
         peer.on('error', (err) => {
           console.error(`[${timestamp()}] [Client] Peer error:`, err);
+
+          // Check if it's an authentication error
+          if (err.message && (err.message.includes('401') || err.message.includes('Unauthorized'))) {
+            console.error('[Client] Authentication failed, redirecting to login');
+            localStorage.removeItem('token');
+            window.location.href = '/login.html';
+            return;
+          }
+
           updateConnectionStatus(false);
         });
 
@@ -731,6 +752,14 @@
       } catch (err) {
         console.error(`[${timestamp()}] [Client] Connection failed:`, err);
         updateConnectionStatus(false);
+
+        // Check if it's an authentication error
+        if (err.message && (err.message.includes('401') || err.message.includes('Unauthorized'))) {
+          console.error('[Client] Authentication failed, redirecting to login');
+          localStorage.removeItem('token');
+          window.location.href = '/login.html';
+          return;
+        }
 
         // Cleanup on failure
         if (peer) {
