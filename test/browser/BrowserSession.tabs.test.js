@@ -34,20 +34,25 @@ test("BrowserSession: switchPage switches active and screencast target", async (
   const session = new BrowserSession({ url: CLICK_TARGET, width: 400, height: 300 });
   await session.start();
   try {
+    // Create second page - auto-switches to it
     const page2 = await session._context.newPage();
     await page2.goto(PAGE_B, { waitUntil: "domcontentloaded" });
     await new Promise((r) => setTimeout(r, 200));
     const ids = [...session._pages.keys()];
     assert.equal(ids.length, 2);
 
-    const initialActive = session._activePageId;
-    const otherId = ids.find((id) => id !== initialActive);
-    await session.switchPage(otherId);
-    assert.equal(session._activePageId, otherId, "active switched");
+    // After auto-switch, active should be the new page (page-b)
+    const urlAfterAutoSwitch = session.getUrl();
+    assert.ok(urlAfterAutoSwitch.includes("page-b.html"), `expected page-b URL after auto-switch, got ${urlAfterAutoSwitch}`);
 
-    // getUrl reflects the new active page
-    const url = session.getUrl();
-    assert.ok(url.includes("page-b.html"), `expected page-b URL, got ${url}`);
+    // Now manually switch back to first page
+    const page1Id = ids.find((id) => id !== session._activePageId);
+    await session.switchPage(page1Id);
+    assert.equal(session._activePageId, page1Id, "can manually switch back");
+
+    // getUrl reflects the first page
+    const urlAfterManualSwitch = session.getUrl();
+    assert.ok(urlAfterManualSwitch.includes("click-target.html"), `expected click-target URL after manual switch, got ${urlAfterManualSwitch}`);
 
     await session.stop();
   } catch (err) {

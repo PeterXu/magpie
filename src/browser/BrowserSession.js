@@ -272,6 +272,10 @@ export class BrowserSession {
           // User-initiated newPage() - resolve the promise and auto-switch
           this._resolveNewPageId(id);
           this._resolveNewPageId = null;
+        } else {
+          // Auto-switch to new tabs: target="_blank" links or other automatic openings
+          // This matches browser behavior and provides better UX
+          this.switchPage(id).catch(() => {});
         }
       });
     });
