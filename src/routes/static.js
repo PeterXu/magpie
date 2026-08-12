@@ -60,6 +60,7 @@ const MODULE_FILES = {
   '/MagpieConnection.js': { file: 'MagpieConnection.js', type: 'text/javascript' },
   '/MagpieNegotiator.js': { file: 'MagpieNegotiator.js', type: 'text/javascript' },
   '/MagpieSignalChannel.js': { file: 'MagpieSignalChannel.js', type: 'text/javascript' },
+  '/MagpieInputEvents.js': { file: 'MagpieInputEvents.js', type: 'text/javascript' },
 };
 
 Object.entries(MODULE_FILES).forEach(([route, config]) => {
