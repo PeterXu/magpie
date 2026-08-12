@@ -12,6 +12,7 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { app as healthApp } from './routes/health.js';
+import { app as publicApp } from './routes/public.js';
 import { app as staticApp } from './routes/static.js';
 import { createSignalingRoute } from './routes/ws/signaling.js';
 import { createInternalRoute } from './routes/ws/internal.js';
@@ -76,6 +77,9 @@ export function createApp({ browserSession, streamerPeer, inputChannel, clientIc
       return c.text('not found', 404);
     }
   });
+
+  // Mount public HTTP routes
+  app.route('/', publicApp);
 
   // Protected routes (auth required)
   app.use('/*', requireAuth());
