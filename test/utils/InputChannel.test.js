@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InputChannel } from "../../src/webrtc/InputChannel.js";
+import { InputChannel } from "../../src/utils/InputChannel.js";
 
 function fakeBrowserSession() {
   const calls = [];

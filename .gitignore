@@ -1,3 +1,4 @@
+dist/
 node_modules/
 .DS_Store
 .env
@@ -5,4 +6,5 @@ mitmproxy
 lyrebird
 .playwright-mcp
 run_bld.sh
+src/public/magpie-webrtc.js
 *.log

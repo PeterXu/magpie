@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildIceServers } from "../../src/webrtc/ice-servers.js";
+import { buildIceServers } from "../../src/utils/ice-servers.js";
 
 test("buildIceServers: empty when missing creds/host", () => {
   assert.deepEqual(buildIceServers({ host: "coturn" }), []);

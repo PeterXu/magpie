@@ -5,7 +5,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { BrowserSession } from "../src/browser/BrowserSession.js";
 import { StreamerPeer } from "../src/streamer/StreamerPeer.js";
-import { InputChannel } from "../src/webrtc/InputChannel.js";
+import { InputChannel } from "../src/utils/InputChannel.js";
 import { serve } from "@hono/node-server";
 import { createApp } from "../src/app.js";
 import { WebSocketManager } from "../src/websocket/WebSocketManager.js";

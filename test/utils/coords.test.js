@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mapClientToPage } from "../../src/webrtc/coords.js";
+import { mapClientToPage } from "../../src/utils/coords.js";
 
 test("mapClientToPage: identity when display == page", () => {
   const r = mapClientToPage({ clientX: 640, clientY: 400, displayW: 1280, displayH: 800, pageW: 1280, pageH: 800 });

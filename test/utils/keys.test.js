@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mapKey, parseInputMessage } from "../../src/webrtc/keys.js";
+import { mapKey, parseInputMessage } from "../../src/utils/keys.js";
 
 test("mapKey: letter a", () => {
   const d = mapKey({ key: "a", code: "KeyA", keyCode: 65 });

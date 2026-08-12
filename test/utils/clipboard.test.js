@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInputMessage } from '../../src/webrtc/keys.js';
-import { InputChannel } from '../../src/webrtc/InputChannel.js';
+import { parseInputMessage } from '../../src/utils/keys.js';
+import { InputChannel } from '../../src/utils/InputChannel.js';
 
 describe('Clipboard message parsing', () => {
   it('parses paste message', () => {

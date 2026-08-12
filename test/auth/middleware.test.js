@@ -95,39 +95,13 @@ test('requireWsAuth passes with valid token in URL', async () => {
 });
 
 test('requireWsAuth throws without token', async () => {
-  const app = new Hono();
-  const secret = 'test-secret';
-
-  app.use('/ws', requireWsAuth());
-  app.get('/ws', (c) => c.json({ user: c.user }));
-
-  const env = { JWT_SECRET: secret };
-
-  try {
-    await app.request('/ws', {}, env);
-    assert.fail('Should throw error');
-  } catch (err) {
-    // Error message might be in the stack trace, check the error was thrown
-    assert.ok(err);
-    assert.ok(err.message.includes('Missing token') || err.message.includes('Invalid token') || err.code === 'ERR_ASSERTION');
-  }
+  const mw = requireWsAuth();
+  const c = { req: { url: 'http://127.0.0.1/ws' }, env: { JWT_SECRET: 'test-secret' } };
+  await assert.rejects(() => mw(c, () => {}), /Missing token/);
 });
 
 test('requireWsAuth throws with invalid token', async () => {
-  const app = new Hono();
-  const secret = 'test-secret';
-
-  app.use('/ws', requireWsAuth());
-  app.get('/ws', (c) => c.json({ user: c.user }));
-
-  const env = { JWT_SECRET: secret };
-
-  try {
-    await app.request('/ws?token=invalid-token', {}, env);
-    assert.fail('Should throw error');
-  } catch (err) {
-    // Error message might be in the stack trace, check the error was thrown
-    assert.ok(err);
-    assert.ok(err.message.includes('Invalid token') || err.code === 'ERR_ASSERTION');
-  }
+  const mw = requireWsAuth();
+  const c = { req: { url: 'http://127.0.0.1/ws?token=invalid-token' }, env: { JWT_SECRET: 'test-secret' } };
+  await assert.rejects(() => mw(c, () => {}), /Invalid token/);
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickCodec } from "../../src/webrtc/codec-pick.js";
+import { pickCodec } from "../../webrtc/src/codec-pick.js";
 
 test("pickCodec: both have av1 -> av1", () => {
   assert.equal(pickCodec(["av1", "vp9", "vp8", "h264"], ["av1", "vp9", "vp8", "h264"]), "av1");

@@ -1,7 +1,7 @@
 // Test codec selection in MagpiePeer
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { MagpiePeer } from '../../src/webrtc/MagpiePeer.js';
+import { MagpiePeer } from '../../webrtc/src/MagpiePeer.js';
 
 describe('MagpiePeer codec selection', () => {
   let peer;
