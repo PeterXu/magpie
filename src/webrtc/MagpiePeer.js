@@ -1,6 +1,7 @@
 import { EventEmitter } from './EventEmitter.js';
 import { MagpieConnection } from './MagpieConnection.js';
 import { MagpieSignalChannel } from './MagpieSignalChannel.js';
+import { pickCodec } from './codec-pick.js';
 
 /**
  * Main peer class for connection management
@@ -136,10 +137,12 @@ export class MagpiePeer extends EventEmitter {
       ...options
     };
 
-    // Handle recvonly mode
+    // Handle recvonly mode with codec selection
     if (options.recvonly) {
       connectionOptions.recvonly = true;
-      connectionOptions.codecSelect = options.codecSelect;
+
+      // Auto-generate codecSelect for preferCodec
+      connectionOptions.codecSelect = this._createCodecSelector(options.preferCodec);
     }
 
     const connection = new MagpieConnection(null, this, connectionOptions);
@@ -356,5 +359,57 @@ export class MagpiePeer extends EventEmitter {
 
     this._destroyed = true;
     this.emit('close');
+  }
+
+  /**
+   * Create codec selector for preferred codec
+   * @param {string} preferredCodec - Preferred codec name (e.g., 'h264', 'vp8', 'vp9', 'av1')
+   *                 Uses pickCodec to find best mutually supported codec if no preferredCodec.
+   * @returns {Function} Codec selection function
+   */
+  _createCodecSelector(preferredCodec) {
+    return (transceiver) => {
+      try {
+        const recv = RTCRtpReceiver.getCapabilities("video");
+        if (!recv || !recv.codecs) {
+          console.warn('[MagpiePeer] Cannot get video capabilities');
+          return;
+        }
+
+        let selectedCodec = preferredCodec;
+        if (!selectedCodec) {
+          // Use pickCodec to find best mutually supported codec
+          const clientCodecs = [...new Set(recv.codecs.map(c =>
+            (c.mimeType.split("/")[1] || "").toLowerCase()
+          ))];
+          selectedCodec = pickCodec(this.magpieCodecs, clientCodecs);
+        }
+
+        if (!selectedCodec) {
+          console.log('[MagpiePeer] No mutually supported codec found, using browser default');
+          return;
+        }
+
+        const targetCodec = selectedCodec.toLowerCase();
+        const clientCodecs = recv.codecs.map(c =>
+          (c.mimeType.split("/")[1] || "").toLowerCase()
+        );
+
+        if (!clientCodecs.includes(targetCodec)) {
+          console.warn(`[MagpiePeer] Codec ${targetCodec} not supported by client`);
+          return;
+        }
+
+        const want = recv.codecs.filter(c =>
+          (c.mimeType.split("/")[1] || "").toLowerCase() === targetCodec
+        );
+        const rtx = recv.codecs.filter(c => c.mimeType === "video/rtx");
+
+        transceiver.setCodecPreferences([...want, ...rtx]);
+        console.log(`[MagpiePeer] Codec preference set to ${targetCodec}`);
+      } catch (e) {
+        console.warn('[MagpiePeer] Codec selection failed:', e);
+      }
+    };
   }
 }

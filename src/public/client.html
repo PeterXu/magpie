@@ -526,7 +526,6 @@
     </div>
   </div>
   <script type="module">
-    import { pickCodec } from "/codec-pick.js";
     import { MagpiePeer } from "/MagpiePeer.js";
 
     // ===== Token Verification =====
@@ -709,30 +708,10 @@
         const testRelay = new URLSearchParams(location.search).get("testrelay") === "1";
 
         // Connect and wait for WebRTC connection
+        // Codec selection is now handled automatically by MagpiePeer
         currentConnection = await peer.connect({
           recvonly: true,
           iceTransportPolicy: testRelay ? 'relay' : undefined,
-          codecSelect: (transceiver) => {
-            try {
-              const recv = RTCRtpReceiver.getCapabilities("video");
-              if (!recv || !recv.codecs) return;
-
-              const clientSet = [...new Set(recv.codecs.map((c) =>
-                (c.mimeType.split("/")[1] || "").toLowerCase()
-              ))];
-
-              const picked = pickCodec(peer.magpieCodecs || [], clientSet);
-              if (!picked) return;
-
-              const want = recv.codecs.filter((c) =>
-                (c.mimeType.split("/")[1] || "").toLowerCase() === picked
-              );
-              const rtx = recv.codecs.filter((c) => c.mimeType === "video/rtx");
-              transceiver.setCodecPreferences([...want, ...rtx]);
-            } catch (e) {
-              console.warn(`[${timestamp()}] Codec selection failed:`, e);
-            }
-          },
           timeout: 10000
         });
 
