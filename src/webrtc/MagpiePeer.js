@@ -67,13 +67,23 @@ export class MagpiePeer extends EventEmitter {
 
     this.signal.on('error', (error) => {
       console.error('[MagpiePeer] Signal error:', error);
+
+      // Check if it's an authentication error
+      if (this._isAuthError(error)) {
+        // Disable auto-reconnect on authentication failure
+        if (this.signal._shouldReconnect) {
+          this.signal._shouldReconnect = false;
+        }
+        this.emit('authenticationFailed');
+        return;
+      }
+
       this.emit('error', error);
     });
   }
 
   /**
-   * Connect to signaling server and start WebRTC
-   * Returns promise that resolves when connected
+   * Wait for hello message with timeout
    */
   async connect(options = {}) {
     if (this._destroyed) {
@@ -117,6 +127,11 @@ export class MagpiePeer extends EventEmitter {
       this.once('error', (error) => {
         clearTimeout(timeout);
         reject(error);
+      });
+
+      this.once('authenticationFailed', () => {
+        clearTimeout(timeout);
+        reject(new Error('Authentication failed'));
       });
     });
   }
@@ -359,6 +374,39 @@ export class MagpiePeer extends EventEmitter {
 
     this._destroyed = true;
     this.emit('close');
+  }
+
+  /**
+   * Check if error is an authentication error
+   * @param {Error|Object} error - Error object
+   * @returns {boolean} True if authentication error
+   */
+  _isAuthError(error) {
+    if (!error) return false;
+
+    // Extract message from various error formats
+    const message = error.message ||
+                    error.error?.message ||
+                    error.reason ||
+                    '';
+
+    // Check for authentication-related keywords
+    const authKeywords = [
+      '401',
+      'Unauthorized',
+      'Authentication failed',
+      'Missing token',
+      'Invalid token'
+    ];
+
+    const isAuthMessage = authKeywords.some(keyword =>
+      message.toLowerCase().includes(keyword.toLowerCase())
+    );
+
+    // Check WebSocket close code 1008 (Policy Violation)
+    const isPolicyViolation = error.code === 1008;
+
+    return isAuthMessage || isPolicyViolation;
   }
 
   /**
