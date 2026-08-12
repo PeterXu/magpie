@@ -705,7 +705,7 @@
 
         // Connect and wait for WebRTC connection
         // Codec selection is now handled automatically by MagpiePeer
-        currentConnection = await peer.connect({
+        currentConnection = await peer.connect(null, {
           recvonly: true,
           iceTransportPolicy: testRelay ? 'relay' : undefined,
           timeout: 10000

@@ -57,8 +57,8 @@ export class StreamerPeer {
     }
   }
 
-  async relayOffer(offerSdp) {
-    return this._page.evaluate((opts) => window.relayOffer(opts.offer, opts.iceServers), { offer: offerSdp, iceServers: this._iceServers ?? [] });
+  async relayOffer(message) {
+    return this._page.evaluate((opts) => window.relayOffer(opts.message, opts.iceServers), { message, iceServers: this._iceServers ?? [] });
   }
 
   async stop() {

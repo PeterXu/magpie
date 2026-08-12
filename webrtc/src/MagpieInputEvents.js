@@ -1,6 +1,9 @@
 import { EventEmitter } from './EventEmitter.js';
+import console from './logger.js';
 
 export class MagpieInputEvents extends EventEmitter {
+  TAG = '[MagpieInputEvents]';
+
   constructor(options = {}) {
     super();
 
@@ -164,7 +167,7 @@ export class MagpieInputEvents extends EventEmitter {
             this.send({ t: 'paste', text });
           }
         } catch (err) {
-          console.error('Paste failed:', err);
+          console.error(this.TAG, 'Paste failed:', err);
         }
         break;
       case 'selectall':
@@ -274,7 +277,7 @@ export class MagpieInputEvents extends EventEmitter {
     if (key === 'v') {
       // Paste: always read local clipboard and send to remote
       if (!await this.requestClipboardPermission()) {
-        console.warn('[Clipboard] Permission denied');
+        console.warn(this.TAG, 'Clipboard Permission denied');
         return;
       }
 
@@ -284,7 +287,7 @@ export class MagpieInputEvents extends EventEmitter {
           this.send({ t: "paste", text });
         }
       } catch (err) {
-        console.error('[Clipboard] Read failed:', err);
+        console.error(this.TAG, 'Clipboard Read failed:', err);
       }
     } else if (key === 'c' || key === 'x') {
       // Copy/Cut: only handle when in remote video context

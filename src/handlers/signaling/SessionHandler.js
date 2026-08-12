@@ -54,8 +54,8 @@ export class SessionHandler {
    * @returns {Object} Answer message with SDP
    */
   async handleOffer(msg) {
-    const sdp = await this.streamerPeer.relayOffer(msg.sdp);
-    return { t: 'answer', sdp };
+    const reply = await this.streamerPeer.relayOffer(msg);
+    return { t: 'answer', ...reply };
   }
 
   /**

@@ -1,16 +1,21 @@
 import { EventEmitter } from './EventEmitter.js';
+import console from './logger.js';
 
 export class MagpieCanvasMedia extends EventEmitter {
+  TAG = '[MagpieCanvasMedia]';
+
   constructor(options = {}) {
     super();
 
     this.canvas = options.canvas;
     this.ctx = this.canvas.getContext("2d");
 
-    this.wsUrl = options.wsUrl;
+    this.url = options.url;
     this.ws = null;
     this.wsConnected = false;
 
+    this._pendingData = null;
+    this._processing = false;
     this.drawIntervalId = -1;
     this.lastFrame = false;
 
@@ -31,45 +36,57 @@ export class MagpieCanvasMedia extends EventEmitter {
     this.canvas.width = W;
     this.canvas.height = H;
     this.params = {W, H, FPS, BITRATE, MAXFPS, DEGRADATION};
-    console.log(`[MagpieCanvasMedia] set ws=${this.wsUrl}, params=`, JSON.stringify(this.params));
+    console.log(this.TAG, `setParams ws=${this.url}, params=`, JSON.stringify(this.params));
   }
 
   createLocalStream() {
-    console.log(`[MagpieCanvasMedia] capture stream fps=`, this.params.FPS);
+    console.log(this.TAG, `capture stream fps=`, this.params.FPS);
     return this.canvas.captureStream(this.params.FPS);
   }
 
   // Receive JPEG frames from Node and draw them.
   connectSource() {
-    console.log('[MagpieCanvasMedia] create ws connection to receive frames');
+    console.log(this.TAG, 'create ws connection to receive frames');
   
     if (!!this.ws) {
       this.ws.close();
       this.ws = null;
     }
 
-    const ws = new WebSocket(this.wsUrl);
+    const ws = new WebSocket(this.url);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       this.wsConnected = true;
-      console.log('[MagpieCanvasMedia] ws connected url=', this.wsUrl);
+      console.log(this.TAG, 'ws connected url=', this.url);
     };
-
-    ws.onmessage = async (e) => {
-      try {
-        const bmp = await createImageBitmap(new Blob([e.data]));
-        this.ctx.drawImage(bmp, 0, 0, this.params.W, this.params.H);
-        if (this.lastFrame) this.lastFrame.close();
-        this.lastFrame = bmp;
-      } catch {}
-    };
-
+    ws.onmessage = async (e) => {await this.feedImage(e.data);};
     ws.onclose = () => {
-      console.log('[MagpieCanvasMedia] ws closed');
+      console.log(this.TAG, 'ws closed');
       this.wsConnected = false;
     };
 
     this.ws = ws;
+  }
+
+  async feedImage(data) {
+    this._pendingData = data;
+    if (this._processing) return;        // 已有处理在进行，最新帧会在循环里被取到
+
+    this._processing = true;
+    try {
+      while (this._pendingData != null) {
+        const d = this._pendingData;
+        this._pendingData = null;
+        try {
+          const bmp = await createImageBitmap(new Blob([d]));
+          this.ctx.drawImage(bmp, 0, 0, this.params.W, this.params.H);
+          if (this.lastFrame) this.lastFrame.close();
+          this.lastFrame = bmp;
+        } catch {}
+      }
+    } finally {
+      this._processing = false;
+    }
   }
 
   // Force the canvas to continuously update so captureStream generates frames

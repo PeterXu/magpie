@@ -1,22 +1,19 @@
 import { EventEmitter } from './EventEmitter.js';
 import { MagpieConnection } from './MagpieConnection.js';
 import { MagpieSignalChannel } from './MagpieSignalChannel.js';
+import { MagpieCanvasMedia } from './MagpieCanvasMedia.js';
 import { pickCodec } from './codec-pick.js';
+import console from './logger.js';
 
 /**
  * Main peer class for connection management
  * Manages both signaling (WebSocket) and WebRTC connections
  */
 export class MagpiePeer extends EventEmitter {
+  TAG = '[MagpiePeer]';
+
   constructor(options = {}) {
     super();
-
-    // Signaling channel
-    this.signal = new MagpieSignalChannel({
-      url: options.url,
-      reconnectInterval: options.reconnectInterval || 1000,
-      maxReconnectAttempts: options.maxReconnectAttempts || 5
-    });
 
     // ICE servers (updated from hello message)
     this.iceServers = options.iceServers || [];
@@ -30,8 +27,9 @@ export class MagpiePeer extends EventEmitter {
     this._disconnected = false;
     this._open = false;
 
-    // Setup signal event handlers
-    this._setupSignalHandlers();
+    // Signaling channel
+    this.initSignalChannel(options);
+    this.canvasMedia = null;
   }
 
   get id() {
@@ -46,12 +44,43 @@ export class MagpiePeer extends EventEmitter {
     return this._disconnected;
   }
 
+  async setCanvasStream(options) {
+    this.canvasMedia = new MagpieCanvasMedia(options);
+    this.canvasMedia.startDrawLoop();
+
+    // create signal channel for receiving frame
+    await this._createSignalConnect(options);
+  }
+
+  async relayOffer(message, iceServers, params) {
+    // TODO
+    const stream = this.canvasMedia.createLocalStream();
+    const connection = await this.connectWithoutSignal(stream, {
+      connectionId: message.connectionId,
+      offer: message.sdp,
+      iceServers,
+      ...params
+    });
+  }
+
+  initSignalChannel(options = {}) {
+    // Signaling channel
+    this.signal = new MagpieSignalChannel({
+      url: options.url,
+      reconnectInterval: options.reconnectInterval || 1000,
+      maxReconnectAttempts: options.maxReconnectAttempts || 5
+    });
+
+    // Setup signal event handlers
+    this._setupSignalHandlers();
+  }
+
   /**
    * Setup signal channel event handlers
    */
   _setupSignalHandlers() {
     this.signal.on('connected', () => {
-      console.log('[MagpiePeer] Signal channel connected');
+      console.log(this.TAG, 'Signal channel connected');
       this._disconnected = false;
       this.emit('signalConnected');
     });
@@ -61,12 +90,12 @@ export class MagpiePeer extends EventEmitter {
     });
 
     this.signal.on('disconnected', (data) => {
-      console.log('[MagpiePeer] Signal channel disconnected', data);
+      console.log(this.TAG, 'Signal channel disconnected', data);
       this.emit('signalDisconnected', data);
     });
 
     this.signal.on('error', (error) => {
-      console.error('[MagpiePeer] Signal error:', error);
+      console.error(this.TAG, 'Signal error:', error);
 
       // Check if it's an authentication error
       if (this._isAuthError(error)) {
@@ -82,10 +111,28 @@ export class MagpiePeer extends EventEmitter {
     });
   }
 
+  async connectWithoutSignal(stream, options = {}) {
+    if (this._destroyed) {
+      throw new Error('Peer destroyed');
+    }
+
+    if (this._disconnected) {
+      this._disconnected = false;
+    }
+
+    // Create WebRTC connection once signal handshake is open
+    const connection = await this._createConnection(stream, options);
+    if (!connection) {
+      throw new Error('Failed to create connection');
+    }
+
+    return connection;
+  }
+
   /**
    * Wait for hello message with timeout
    */
-  async connect(options = {}) {
+  async connect(stream, options = {}) {
     if (this._destroyed) {
       throw new Error('Peer destroyed');
     }
@@ -95,78 +142,60 @@ export class MagpiePeer extends EventEmitter {
     }
 
     // Connect signal channel
-    const url = options.url || this.signal.url;
-    if (!url) {
-      throw new Error('No signaling URL provided');
+    await this._createSignalConnect(options);
+   
+    // Create WebRTC connection once signal handshake is open
+    const connection = await this._createConnection(stream, options);
+    if (!connection) {
+      throw new Error('Failed to create connection');
     }
 
-    console.log('[MagpiePeer] Connecting to', url);
+    return connection;
+  }
 
-    // Start signal connection
-    this.signal.connect(url);
+  async _createSignalConnect(options = {}) {
+     // Connect signal channel
+    console.log(this.TAG, 'Connecting to signal with url: ', options.url);
+    this.signal.connect(options.url);
 
-    // Wait for hello message with timeout
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Connection timeout'));
-      }, options.timeout || 10000);
+    // Wait for hello (open), or fail on error / authentication failure / timeout.
+    // Plain `on` + explicit cleanup so no listeners linger after settle (a
+    // once-listener that never fired would otherwise stay attached to this peer).
+    await new Promise((resolve, reject) => {
+      let timer;
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off('open', onOpen);
+        this.off('error', onError);
+        this.off('authenticationFailed', onAuth);
+      };
+      const onOpen = () => { cleanup(); resolve(); };
+      const onError = (error) => { cleanup(); reject(error); };
+      const onAuth = () => { cleanup(); reject(new Error('Authentication failed')); };
 
-      this.once('open', (id) => {
-        clearTimeout(timeout);
+      timer = setTimeout(() => { cleanup(); reject(new Error('Connection timeout')); }, options.timeout || 10000);
 
-        // Create WebRTC connection
-        const connection = this._createConnection(options);
-
-        if (connection) {
-          resolve(connection);
-        } else {
-          reject(new Error('Failed to create connection'));
-        }
-      });
-
-      this.once('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-
-      this.once('authenticationFailed', () => {
-        clearTimeout(timeout);
-        reject(new Error('Authentication failed'));
-      });
+      this.on('open', onOpen);
+      this.on('error', onError);
+      this.on('authenticationFailed', onAuth);
     });
   }
 
   /**
    * Create WebRTC connection after signal connected
    */
-  _createConnection(options = {}) {
-    if (this._connections.size > 0) {
-      console.warn('[MagpiePeer] Connection already exists');
-      return this._connections.values().next().value;
-    }
+  async _createConnection(stream, options = {}) {
+    console.log(this.TAG, 'Creating WebRTC connection');
 
-    console.log('[MagpiePeer] Creating WebRTC connection');
-
-    const connectionOptions = {
-      iceServers: this.iceServers,
-      ...options
-    };
-
-    // Handle recvonly mode with codec selection
-    if (options.recvonly) {
-      connectionOptions.recvonly = true;
-
-      // Auto-generate codecSelect for preferCodec
-      connectionOptions.codecSelect = this._createCodecSelector(options.preferCodec);
-    }
-
-    const connection = new MagpieConnection(null, this, connectionOptions);
-
+    const connection = new MagpieConnection(null, this, options);
     this._addConnection(connection);
-
-    // Start negotiation
-    connection.startConnection(null, connectionOptions);
-
+  
+    const configOptions = {
+      iceServers: options.iceServers || this.iceServers,
+      codecSelect: this._createCodecSelector(options.preferCodec),
+      ...options,
+    }
+    await connection.startHandshake(stream, configOptions);
     return connection;
   }
 
@@ -178,6 +207,10 @@ export class MagpiePeer extends EventEmitter {
     const type = message.t || message.type;
 
     switch (type) {
+      case 'frame':
+        this._handleFrame(message);
+        break;
+
       case 'hello':
         this._handleHello(message);
         break;
@@ -200,11 +233,17 @@ export class MagpiePeer extends EventEmitter {
     }
   }
 
+  _handleFrame(message) {
+    if (message.data && this.canvasMedia) {
+      this.canvasMedia.feedImage(message.data);
+    }
+  }
+
   /**
    * Handle hello message from server
    */
   _handleHello(message) {
-    console.log('[MagpiePeer] Received hello');
+    console.log(this.TAG, 'Received hello');
 
     // Update ICE servers if provided
     if (message.iceServers) {
@@ -225,18 +264,23 @@ export class MagpiePeer extends EventEmitter {
    * Handle answer message
    */
   _handleAnswer(message) {
+    console.log(this.TAG, "_handleAnswer");
     const sdp = message.sdp || message.payload?.sdp;
     if (!sdp) {
-      console.error('[MagpiePeer] Answer missing sdp');
+      console.error(this.TAG, '_handleAnswer, missing sdp');
+      return;
+    }
+  
+    const connectionId = message.connectionId || message.payload?.connectionId;
+    const connection = this._connections.get(connectionId);
+    if (!connection) {
+      console.warn(this.TAG, '_handleAnswer, no connection=', connectionId);
       return;
     }
 
-    // Forward to all connections
-    this._connections.forEach((connection) => {
-      connection.handleMessage({
-        type: 'answer',
-        payload: { sdp }
-      });
+    connection.handleMessage({
+      type: 'answer',
+      payload: { sdp }
     });
   }
 
@@ -244,18 +288,23 @@ export class MagpiePeer extends EventEmitter {
    * Handle candidate message
    */
   _handleCandidate(message) {
+    console.log(this.TAG, "_handleCandidate");
     const candidate = message.candidate || message.payload?.candidate;
     if (!candidate) {
-      console.warn('[MagpiePeer] Candidate missing');
+      console.warn(this.TAG, '_handleCandidate, candidate missing');
       return;
     }
 
-    // Forward to all connections
-    this._connections.forEach((connection) => {
-      connection.handleMessage({
-        type: 'candidate',
-        payload: { candidate }
-      });
+    const connectionId = message.connectionId || message.payload?.connectionId;
+    const connection = this._connections.get(connectionId);
+    if (!connection) {
+      console.warn(this.TAG, '_handleCandidate, no connection=', connectionId);
+      return;
+    }
+
+    connection.handleMessage({
+      type: 'candidate',
+      payload: { candidate }
     });
   }
 
@@ -302,27 +351,29 @@ export class MagpiePeer extends EventEmitter {
       this.signal.send({
         t: 'candidate',
         candidate: data.candidate,
-        connectionId: data.connectionId
+        connectionId: connection.id
       });
     });
 
     connection.on('offer', (data) => {
-      console.log('[MagpiePeer] Sending offer');
+      console.log(this.TAG, 'Sending offer with id=', connection.id);
       this.signal.send({
         t: 'offer',
-        sdp: data.sdp.sdp || data.sdp
+        sdp: data.sdp.sdp || data.sdp,
+        connectionId: connection.id
       });
     });
 
     connection.on('answer', (data) => {
       this.signal.send({
         t: 'answer',
-        sdp: data.sdp.sdp || data.sdp
+        sdp: data.sdp.sdp || data.sdp,
+        connectionId: connection.id
       });
     });
 
     connection.on('error', (err) => {
-      this.emit('error', err);
+      this.emit('error', { ...err, connectionId: connection.id });
     });
 
     connection.on('close', () => {
@@ -343,7 +394,7 @@ export class MagpiePeer extends EventEmitter {
   async disconnect() {
     if (this._disconnected) return;
 
-    console.log('[MagpiePeer] Disconnecting...');
+    console.log(this.TAG, 'Disconnecting...');
 
     // Close all connections
     const closePromises = [];
@@ -420,7 +471,7 @@ export class MagpiePeer extends EventEmitter {
       try {
         const recv = RTCRtpReceiver.getCapabilities("video");
         if (!recv || !recv.codecs) {
-          console.warn('[MagpiePeer] Cannot get video capabilities');
+          console.warn(this.TAG, 'Cannot get video capabilities');
           return;
         }
 
@@ -434,7 +485,7 @@ export class MagpiePeer extends EventEmitter {
         }
 
         if (!selectedCodec) {
-          console.log('[MagpiePeer] No mutually supported codec found, using browser default');
+          console.log(this.TAG, 'No mutually supported codec found, using browser default');
           return;
         }
 
@@ -444,7 +495,7 @@ export class MagpiePeer extends EventEmitter {
         );
 
         if (!clientCodecs.includes(targetCodec)) {
-          console.warn(`[MagpiePeer] Codec ${targetCodec} not supported by client`);
+          console.warn(this.TAG, `Codec ${targetCodec} not supported by client`);
           return;
         }
 
@@ -454,9 +505,9 @@ export class MagpiePeer extends EventEmitter {
         const rtx = recv.codecs.filter(c => c.mimeType === "video/rtx");
 
         transceiver.setCodecPreferences([...want, ...rtx]);
-        console.log(`[MagpiePeer] Codec preference set to ${targetCodec}`);
+        console.log(this.TAG, `Codec preference set to ${targetCodec}`);
       } catch (e) {
-        console.warn('[MagpiePeer] Codec selection failed:', e);
+        console.warn(this.TAG, 'Codec selection failed:', e);
       }
     };
   }

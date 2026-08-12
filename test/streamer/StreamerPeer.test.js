@@ -10,6 +10,7 @@ import { StreamerPeer } from "../../src/streamer/StreamerPeer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STREAMER_HTML = path.join(__dirname, "..", "..", "src", "streamer", "streamer.html");
+const BUNDLE_PATH = path.join(__dirname, "..", "..", "webrtc", "dist", "magpie-webrtc.js");
 
 // A 1x1 PNG (valid, dependency-free) used to push at least one frame.
 const PNG_1x1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -40,9 +41,11 @@ window.setAnswer = async (a) => {
 test("StreamerPeer: relays offer and streams pushed frames to a client peer", async () => {
   const browser = await chromium.launch({ headless: true });
   const html = await readFile(STREAMER_HTML, "utf8");
+  const bundle = await readFile(BUNDLE_PATH, "utf8");
 
   const httpServer = http.createServer((req, res) => {
     if (req.url.startsWith("/streamer.html")) { res.writeHead(200, { "content-type": "text/html" }); return res.end(html); }
+    if (req.url.startsWith("/magpie-webrtc.js")) { res.writeHead(200, { "content-type": "application/javascript" }); return res.end(bundle); }
     res.writeHead(404); res.end();
   });
   const internalWss = new WebSocketServer({ server: httpServer, path: "/internal" });
@@ -59,8 +62,8 @@ test("StreamerPeer: relays offer and streams pushed frames to a client peer", as
     const clientPage = await browser.newPage();
     await clientPage.setContent(CLIENT_HTML);
     const offer = await clientPage.evaluate(() => window.makeOffer());
-    const answer = await sp.relayOffer(offer);
-    await clientPage.evaluate((a) => window.setAnswer(a), answer);
+    const answer = await sp.relayOffer({ sdp: offer });
+    await clientPage.evaluate((a) => window.setAnswer(a), answer.sdp);
 
     // Push frames so the track unmutes.
     const pump = setInterval(() => sp.pushFrame(PNG_1x1), 100);

@@ -25,132 +25,21 @@
   // Debug hook: parsed caps (matches the window.__* convention used elsewhere here).
   window.__magpieCfg = { FPS, BITRATE, MAXFPS, DEGRADATION };
 
-  const options = {canvas, wsUrl, W, H, FPS, BITRATE, MAXFPS, DEGRADATION}
-  const canvasMedia = new MagpieWebrtc.MagpieCanvasMedia(options);
+  const options = {canvas, url: wsUrl, W, H, FPS, BITRATE, MAXFPS, DEGRADATION};
+  let peer = new MagpieWebrtc.MagpieStreamPeer();
+  peer.setCanvasStream(options);
 
-  let stream = null; //canvasMedia.createLocalStream();
-  canvasMedia.connectSource();
-  canvasMedia.startDrawLoop();
+  window.relayOffer = async (message, iceServers) => {
+    console.log(`[${timestamp()}] [Streamer] receive remote offer from id=`, message.connectionId);
+    let answer = await peer.relayOffer(message.sdp, iceServers, options);
 
-  let pc = null;
-
-  // Driven by Node via page.evaluate when a client offer arrives.
-  window.relayOffer = async (offer, iceServers) => {
-    console.log("[Streamer] receive remote offer");
-  
-    // 先关闭旧连接，等待资源释放
-    if (pc) {
-      try {
-        // 停止所有track
-        const senders = pc.getSenders();
-        senders.forEach(s => {
-          try { if (s.track) s.track.stop(); } catch {}
-        });
-
-        // 移除事件监听器
-        pc.onicecandidate = null;
-        pc.onicegatheringstatechange = null;
-        pc.onconnectionstatechange = null;
-        pc.oniceconnectionstatechange = null;
-
-        pc.close();
-        // 延长等待时间到200ms，确保TURN deallocation完成
-        await new Promise(r => setTimeout(r, 200));
-        console.log(`[${timestamp()}] [Streamer] Old PC closed, ready for new connection`);
-      } catch (e) {
-        console.warn(`[${timestamp()}] [Streamer] Error closing old pc:`, e);
-      }
-    }
-
-    // 重新创建stream，避免使用ended的track
-    stream = canvasMedia.createLocalStream();
-    console.log(`[${timestamp()}] [Streamer] Created new stream, tracks: ${stream.getVideoTracks().length}`);
-
-    pc = new RTCPeerConnection({ iceServers: iceServers || [] });
-
-    // 监控ICE candidate收集
-    const candidates = { host: 0, stun: 0, turn: 0 };
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        const type = e.candidate.candidate.includes('typ relay') ? 'turn' :
-                     e.candidate.candidate.includes('typ srflx') ? 'stun' : 'host';
-        candidates[type]++;
-      } else {
-        console.log(`[${timestamp()}] [Streamer] ICE gathering complete: ${candidates.host} host, ${candidates.stun} stun, ${candidates.turn} turn`);
-      }
-    };
-
-    const sender = pc.addTrack(stream.getVideoTracks()[0]);
-    // Optional sender caps (maxBitrate/maxFramerate/degradationPreference).
-    // Wrapped: browser/timing quirks must not break the offer — fall back to defaults.
-    if (BITRATE || MAXFPS || DEGRADATION) {
-      try {
-        console.log('[Streamer] set sender params=', BITRATE, MAXFPS, DEGRADATION);
-        const p = sender.getParameters();
-        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-        if (BITRATE) p.encodings[0].maxBitrate = BITRATE;
-        if (MAXFPS) p.encodings[0].maxFramerate = MAXFPS;
-        if (DEGRADATION) p.degradationPreference = DEGRADATION;
-        await sender.setParameters(p);
-      } catch (e) { console.warn("magpie: setParameters failed", e); }
-    }
-    await pc.setRemoteDescription({ type: "offer", sdp: offer });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    const startTime = Date.now();
-    // 智能ICE gathering策略：检测到STUN candidate就完成
-    await new Promise((resolve) => {
-      let hasStunCandidate = false;
-      const maxWait = 5000; // 最长等待5秒（从10秒减少）
-      const minWait = 500;  // 最少等待500ms
-
-      const timer = setTimeout(() => {
-        if (!hasStunCandidate) {
-          console.warn(`[${timestamp()}] [Streamer] No STUN candidate after waiting`);
-        }
-        resolve();
-      }, maxWait);
-
-      const minTimer = setTimeout(() => {
-        if (hasStunCandidate) {
-          clearTimeout(timer);
-          resolve();
-        }
-      }, minWait);
-
-      pc.onicegatheringstatechange = () => {
-        if (pc.iceGatheringState === "complete") {
-          clearTimeout(timer);
-          clearTimeout(minTimer);
-          resolve();
-        }
-      };
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          const type = e.candidate.candidate.includes('typ relay') ? 'turn' :
-                       e.candidate.candidate.includes('typ srflx') ? 'stun' : 'host';
-          candidates[type]++;
-          if (type === 'stun') {
-            hasStunCandidate = true;
-            setTimeout(() => {
-              clearTimeout(timer);
-              resolve();
-            }, 500);
-          }
-        }
-      };
-    });
-
-    const elapsed = Date.now() - startTime;
-    const hasRelay = pc.localDescription.sdp.includes('typ relay');
-    console.log(`[${timestamp()}] [Streamer] ICE gathering: ${elapsed}ms, has relay: ${hasRelay}`);
+    const hasRelay = answer.sdp.includes('typ relay');
+    console.log(`[${timestamp()}] [Streamer] ICE gathering has relay: ${hasRelay}`);
     if (!hasRelay && iceServers && iceServers.length > 0) {
       console.warn(`[${timestamp()}] [Streamer] WARNING: TURN configured but no relay candidate`);
     }
 
-    return pc.localDescription.sdp;
+    return {connectionId: message.connectionId, sdp: answer.sdp};
   };
 
   window.__ready = true;

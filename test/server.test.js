@@ -21,7 +21,7 @@ function startWithMocks() {
     _lastNav: null,
   };
   const inputChannel = { handle: () => {} };
-  const streamerPeer = { relayOffer: async () => "ANSWER-FROM-MOCK", setFrameSocket: () => {}, pushFrame: () => {}, stop: async () => {}, getSenderCodecs: () => ["av1", "vp9", "vp8", "h264"] };
+  const streamerPeer = { relayOffer: async () => ({ sdp: "ANSWER-FROM-MOCK" }), setFrameSocket: () => {}, pushFrame: () => {}, stop: async () => {}, getSenderCodecs: () => ["av1", "vp9", "vp8", "h264"] };
 
   // Create WebSocket manager
   const wsManager = new WebSocketManager();

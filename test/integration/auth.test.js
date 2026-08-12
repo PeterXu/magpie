@@ -18,7 +18,7 @@ function startTestServer(env = {}) {
   };
   const inputChannel = { handle: () => {} };
   const streamerPeer = {
-    relayOffer: async () => "ANSWER-FROM-MOCK",
+    relayOffer: async () => ({ sdp: "ANSWER-FROM-MOCK" }),
     setFrameSocket: () => {},
     pushFrame: () => {},
     stop: async () => {},

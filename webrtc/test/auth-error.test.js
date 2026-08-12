@@ -100,7 +100,7 @@ describe('MagpiePeer authentication error detection', () => {
     }, 10);
 
     try {
-      await peer.connect({ timeout: 1000 });
+      await peer.connect(null, { timeout: 1000 });
       assert.fail('Should reject with authentication error');
     } catch (err) {
       assert.equal(err.message, 'Authentication failed');

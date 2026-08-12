@@ -1,10 +1,13 @@
 import { EventEmitter } from './EventEmitter.js';
+import console from './logger.js';
 
 /**
  * WebSocket signaling channel management
  * Handles connection lifecycle, reconnection, and message routing
  */
 export class MagpieSignalChannel extends EventEmitter {
+  TAG = '[MagpieSignalChannel]';
+
   constructor(options = {}) {
     super();
 
@@ -45,15 +48,21 @@ export class MagpieSignalChannel extends EventEmitter {
     }
 
     if (this._ws && this._ws.readyState === 1) {
-      console.log('[SignalChannel] Already connected');
+      console.log(this.TAG, 'Already connected');
       return;
     }
 
     if (this._isConnecting) {
-      console.log('[SignalChannel] Connection in progress');
+      console.log(this.TAG, 'Connection in progress');
       return;
     }
 
+    if (this._ws) {
+      this._ws.onclose = null;
+      this._ws.close();
+      this._ws = null;
+    }
+  
     this._shouldReconnect = true;
     this._doConnect();
   }
@@ -65,13 +74,14 @@ export class MagpieSignalChannel extends EventEmitter {
     if (this._isConnecting) return;
 
     this._isConnecting = true;
-    console.log('[SignalChannel] Connecting to', this.url);
+    console.log(this.TAG, 'Connecting to', this.url);
 
     try {
       this._ws = new WebSocket(this.url);
+      this._ws.binaryType = "arraybuffer";
 
       this._ws.onopen = () => {
-        console.log('[SignalChannel] WebSocket connected');
+        console.log(this.TAG, 'WebSocket connected');
         this._isConnecting = false;
         this._reconnectAttempts = 0;
         this.emit('connected');
@@ -79,23 +89,26 @@ export class MagpieSignalChannel extends EventEmitter {
 
       this._ws.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data);
-          this.emit('message', message);
+          if (event.data instanceof ArrayBuffer) {
+            this.emit('message', {t: 'frame', data: event.data});
+          } else {
+            const message = JSON.parse(event.data);
+            this.emit('message', message);
+          }
         } catch (err) {
-          console.error('[SignalChannel] Failed to parse message:', err);
+          console.error(this.TAG, 'Failed to parse message:', err);
         }
       };
 
       this._ws.onerror = (error) => {
-        console.error('[SignalChannel] WebSocket error:', error);
+        console.error(this.TAG, 'WebSocket error:', error);
+        this._isConnecting = false;
         this.emit('error', { type: 'WebSocket', error });
       };
 
       this._ws.onclose = (event) => {
-        console.log('[SignalChannel] WebSocket closed, code:', event.code);
+        console.log(this.TAG, 'WebSocket closed, code:', event.code);
         this._isConnecting = false;
-
-        const wasConnected = this._ws && this._ws.readyState === 1;
         this._ws = null;
 
         this.emit('disconnected', { code: event.code, reason: event.reason });
@@ -103,19 +116,19 @@ export class MagpieSignalChannel extends EventEmitter {
         // Auto reconnect if enabled and not manual disconnect
         if (this._shouldReconnect && this._reconnectAttempts < this.maxReconnectAttempts) {
           this._reconnectAttempts++;
-          console.log(`[SignalChannel] Reconnecting in ${this.reconnectInterval}ms (attempt ${this._reconnectAttempts}/${this.maxReconnectAttempts})`);
+          console.log(this.TAG, `Reconnecting in ${this.reconnectInterval}ms (attempt ${this._reconnectAttempts}/${this.maxReconnectAttempts})`);
           setTimeout(() => {
             if (this._shouldReconnect) {
               this._doConnect();
             }
           }, this.reconnectInterval);
         } else if (this._reconnectAttempts >= this.maxReconnectAttempts) {
-          console.error('[SignalChannel] Max reconnect attempts reached');
+          console.error(this.TAG, 'Max reconnect attempts reached');
           this.emit('error', { type: 'ReconnectFailed', message: 'Max reconnect attempts reached' });
         }
       };
     } catch (err) {
-      console.error('[SignalChannel] Connection failed:', err);
+      console.error(this.TAG, 'Connection failed:', err);
       this._isConnecting = false;
       this.emit('error', { type: 'Connection', error: err });
     }
@@ -126,7 +139,7 @@ export class MagpieSignalChannel extends EventEmitter {
    */
   send(message) {
     if (!this._ws || this._ws.readyState !== 1) {
-      console.warn('[SignalChannel] Cannot send: not connected (state:', this.state, ')');
+      console.warn(this.TAG, 'Cannot send: not connected (state:', this.state, ')');
       return false;
     }
 
@@ -135,7 +148,7 @@ export class MagpieSignalChannel extends EventEmitter {
       this._ws.send(data);
       return true;
     } catch (err) {
-      console.error('[SignalChannel] Send failed:', err);
+      console.error(this.TAG, 'Send failed:', err);
       return false;
     }
   }
@@ -144,7 +157,7 @@ export class MagpieSignalChannel extends EventEmitter {
    * Disconnect from server
    */
   disconnect() {
-    console.log('[SignalChannel] Disconnecting...');
+    console.log(this.TAG, 'Disconnecting...');
     this._shouldReconnect = false;
 
     if (this._ws) {

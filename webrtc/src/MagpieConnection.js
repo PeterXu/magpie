@@ -1,23 +1,26 @@
 import { EventEmitter } from './EventEmitter.js';
 import { MagpieNegotiator } from './MagpieNegotiator.js';
+import console from './logger.js';
 
 /**
  * Manages a single connection's stream and state
  * Borrowed from PeerJS design pattern
  */
 export class MagpieConnection extends EventEmitter {
+  TAG = '[MagpieConnection]';
+
   constructor(peerId, provider, options = {}) {
     super();
 
     this.id = options.connectionId || `conn_${this._randomToken()}`;
     this.peerId = peerId;
     this.provider = provider;
-    this.options = options;
 
     this._negotiator = new MagpieNegotiator(this);
     this._localStream = null;
     this._remoteStream = null;
     this._open = false;
+    this.peerConnection = null;
 
     // Setup negotiator event forwarding
     this._setupNegotiatorEvents();
@@ -76,47 +79,44 @@ export class MagpieConnection extends EventEmitter {
   }
 
   /**
-   * Start connection as initiator
+   * Start connection actively or answer incoming connection
+   * 
+   * @param stream: may be null if no recvonly
+   * @param options: options.offer must be exist for answer incoming connection
    */
-  startConnection(stream, options = {}) {
-    console.log('[MagpieConnection] startConnection called with stream:', !!stream, 'options:', options);
+  async startHandshake(stream, options = {}) {
+    console.log(this.TAG, 'startHandshake');
 
     if (this._localStream) {
-      console.warn('Connection already started');
+      console.warn(this.TAG, 'Connection already started');
       return;
     }
-
     this._localStream = stream;
 
-    const negotiatorOptions = {
-      stream,
-      iceServers: this.provider.iceServers,
-      initiator: true,
-      ...options
+    this._negotiator.createConnection(options);
+  
+    const streamOptions = {
+      stream: stream,
+      recvonly: !!options.recvonly,
+      // Auto-generate codecSelect for preferCodec, and valid when recvonly is true.
+      codecSelect: options.codecSelect,
     };
-    console.log('[MagpieConnection] passing to negotiator:', negotiatorOptions);
+    await this._negotiator.setStreamSendRecv(streamOptions);
 
-    this._negotiator.startConnection(negotiatorOptions);
-  }
-
-  /**
-   * Answer incoming connection
-   */
-  answer(stream, options = {}) {
-    if (this._localStream) {
-      console.warn('Connection already answered');
-      return;
+    if (stream) {
+      const senderOptions = {
+        BITRATE: options.BITRATE,
+        MAXFPS: options.MAXFPS,
+        DEGRADATION: options.DEGRADATION,
+      };
+      await this._negotiator.setVideoSenderParameters(senderOptions);
     }
 
-    this._localStream = stream;
-
-    this._negotiator.startConnection({
-      stream,
-      iceServers: this.provider.iceServers,
-      initiator: false,
-      offer: this.options.offer,
-      ...options
-    });
+    const negotiationOptions = {
+      initiator: !options.offer,
+      offer: options.offer,
+    };
+    return await this._negotiator.startNegotiation(negotiationOptions);
   }
 
   /**
@@ -133,7 +133,7 @@ export class MagpieConnection extends EventEmitter {
         break;
 
       default:
-        console.warn(`Unknown message type: ${message.type}`);
+        console.warn(this.TAG, `Unknown message type: ${message.type}`);
     }
   }
 
@@ -141,7 +141,7 @@ export class MagpieConnection extends EventEmitter {
    * Close connection and cleanup resources
    */
   close() {
-    console.log('[MagpieConnection] Closing connection');
+    console.log(this.TAG, 'Closing connection');
 
     // Cleanup negotiator synchronously
     if (this._negotiator) {
@@ -166,7 +166,7 @@ export class MagpieConnection extends EventEmitter {
       this.emit('close');
     }
 
-    console.log('[MagpieConnection] Connection closed');
+    console.log(this.TAG, 'Connection closed');
   }
 
   /**

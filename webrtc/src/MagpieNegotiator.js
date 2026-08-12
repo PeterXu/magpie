@@ -1,10 +1,13 @@
 import { EventEmitter } from './EventEmitter.js';
+import console from './logger.js';
 
 /**
  * Manages RTCPeerConnection negotiations
  * Borrowed from PeerJS design pattern
  */
 export class MagpieNegotiator extends EventEmitter {
+  TAG = '[MagpieNegotiator]';
+
   constructor(connection) {
     super();
     this.connection = connection;
@@ -13,52 +16,85 @@ export class MagpieNegotiator extends EventEmitter {
   /**
    * Start connection with proper ICE handling
    */
-  startConnection(options) {
-    console.log('[MagpieNegotiator] startConnection called with:', {
-      hasStream: !!options.stream,
-      recvonly: options.recvonly,
-      initiator: options.initiator,
-      iceServers: options.iceServers
-    });
+  createConnection(options) {
+    const rtcConfig = {
+      iceServers: options.iceServers || [],
+      iceTransportPolicy: options.iceTransportPolicy || 'all',
+    };
 
-    const rtcConfig = { iceServers: options.iceServers || [] };
-
-    console.log('[MagpieNegotiator] RTCPeerConnection config:', {
-      iceServers: rtcConfig.iceServers?.map(s => s.urls),
-      iceTransportPolicy: rtcConfig.iceTransportPolicy || 'all'
-    });
-
+    console.log(this.TAG, 'createConnection config:', JSON.stringify(rtcConfig));
     const pc = new RTCPeerConnection(rtcConfig);
     this.connection.peerConnection = pc;
-
     this._setupListeners(pc);
+  }
 
+  setStreamSendRecv(options) {
+    const streamConfig = {
+      hasStream: !!options.stream,
+      recvonly: !!options.recvonly,
+      hasCodeSelect: !!options.codecSelect,
+    };
+    console.log(this.TAG, 'setStreamSendRecv config:', JSON.stringify(streamConfig));
+    const pc = this.connection.peerConnection;
+  
     // Add tracks if stream provided (for sendonly/sendrecv)
-    if (options.stream) {
-      console.log('[MagpieNegotiator] Adding tracks from stream');
+    if (streamConfig.hasStream) {
+      console.log(this.TAG, 'Adding tracks from stream');
       this._addTracks(options.stream, pc);
     }
     // For recvonly, add transceiver
-    else if (options.recvonly) {
-      console.log('[MagpieNegotiator] Adding recvonly transceiver');
+    else if (streamConfig.recvonly) {
+      console.log(this.TAG, 'Adding recvonly transceiver');
       const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
 
       // Apply codec selection if provided
-      if (options.codecSelect) {
-        console.log('[MagpieNegotiator] Applying codec selection');
+      if (streamConfig.hasCodeSelect) {
+        console.log(this.TAG, 'Applying codec selection');
         options.codecSelect(transceiver);
       }
     } else {
-      console.warn('[MagpieNegotiator] No stream and not recvonly, connection may fail');
+      console.warn(this.TAG, 'No stream and not recvonly, connection may fail');
+    }
+  }
+
+  async setVideoSenderParameters(options) {
+    const senderConfig = {
+      BITRATE: options.BITRATE || 0,
+      MAXFPS: options.MAXFPS || 0,
+      DEGRADATION: options.DEGRADATION || 0,
+    };
+    console.log(this.TAG, 'setVideoSenderParameters config=', JSON.stringify(senderConfig));
+    if (!options.BITRATE && !options.MAXFPS && !options.DEGRADATION) {
+      return;
     }
 
+    const pc = this.connection.peerConnection;
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (!sender) {
+      console.log(this.TAG, 'setVideoSenderParameters: no video sender');
+      return;
+    }
+  
+    // Optional sender caps (maxBitrate/maxFramerate/degradationPreference).
+    // Wrapped: browser/timing quirks must not break the offer — fall back to defaults.
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      if (options.BITRATE) p.encodings[0].maxBitrate = options.BITRATE;
+      if (options.MAXFPS) p.encodings[0].maxFramerate = options.MAXFPS;
+      if (options.DEGRADATION) p.degradationPreference = options.DEGRADATION;
+      await sender.setParameters(p);
+    } catch (e) { console.warn(this.TAG, "setVideoSenderParameters failed", e); }
+  }
+
+  async startNegotiation(options) {
     // Start negotiation
     if (options.initiator) {
-      console.log('[MagpieNegotiator] Starting negotiation as initiator');
-      this._makeOffer(options);
+      console.log(this.TAG, 'Starting negotiation as initiator');
+      return this._makeOffer(options);
     } else if (options.offer) {
-      console.log('[MagpieNegotiator] Handling incoming offer');
-      this.handleOffer(options.offer);
+      console.log(this.TAG, 'Handling incoming offer');
+      return this._makeAnswer(options);
     }
   }
 
@@ -72,7 +108,7 @@ export class MagpieNegotiator extends EventEmitter {
 
     pc.onicecandidate = (evt) => {
       if (!evt.candidate || !evt.candidate.candidate) {
-        console.log(`[MagpieNegotiator] ICE gathering complete. Candidates: ${candidateStats.host} host, ${candidateStats.srflx} srflx, ${candidateStats.relay} relay`);
+        console.log(this.TAG, `ICE gathering complete. Candidates: ${candidateStats.host} host, ${candidateStats.srflx} srflx, ${candidateStats.relay} relay`);
         return;
       }
 
@@ -83,12 +119,11 @@ export class MagpieNegotiator extends EventEmitter {
 
       candidateStats[type]++;
 
-      console.log(`[MagpieNegotiator] ICE candidate [${type.toUpperCase()} #${candidateStats[type]}]:`, candidate.substring(0, 80));
+      console.log(this.TAG, `ICE candidate [${type.toUpperCase()} #${candidateStats[type]}]:`, candidate.substring(0, 80));
 
       // Immediately send candidate (Trickle ICE pattern)
       this.emit('iceCandidate', {
-        candidate: evt.candidate,
-        connectionId: this.connection.id
+        candidate: evt.candidate
       });
     };
 
@@ -111,7 +146,7 @@ export class MagpieNegotiator extends EventEmitter {
           break;
 
         case 'disconnected':
-          console.log('ICE connection disconnected, may recover');
+          console.log('ICE connection disconnected');
           break;
 
         case 'completed':
@@ -128,18 +163,18 @@ export class MagpieNegotiator extends EventEmitter {
       this.emit('connectionStateChange', state);
 
       if (state === 'failed') {
-        console.error('[MagpieNegotiator] WebRTC connection failed');
+        console.error(this.TAG, 'WebRTC connection failed');
         this.connection.emit('error', { type: 'ConnectionFailed', message: 'WebRTC connection failed' });
         this.connection.close();
       } else if (state === 'connected') {
-        console.log('[MagpieNegotiator] WebRTC connected successfully');
+        console.log(this.TAG, 'WebRTC connected successfully');
         this.connection._open = true;
         this.emit('connected');
 
         // Fallback: poll for receiver track if ontrack hasn't fired with streams
         // This handles edge cases in headless Chromium
         if (!this.connection._remoteStream) {
-          console.log('[MagpieNegotiator] Polling for receiver track...');
+          console.log(this.TAG, 'Polling for receiver track...');
           this._pollForReceiver();
         }
       }
@@ -147,21 +182,21 @@ export class MagpieNegotiator extends EventEmitter {
 
     // TRACK - Handle incoming media stream
     pc.ontrack = (evt) => {
-      console.log('[MagpieNegotiator] ontrack event, streams:', evt.streams?.length || 0);
+      console.log(this.TAG, 'ontrack event, streams:', evt.streams?.length || 0);
 
       if (evt.streams && evt.streams[0]) {
-        console.log('[MagpieNegotiator] Received remote stream');
+        console.log(this.TAG, 'Received remote stream');
         this.connection._remoteStream = evt.streams[0];
         this.emit('stream', evt.streams[0]);
       } else if (evt.receiver && evt.receiver.track) {
         // Fallback: create MediaStream from receiver track
         // This happens when remote uses addTrack instead of transceiver
-        console.log('[MagpieNegotiator] Creating stream from receiver track');
+        console.log(this.TAG, 'reating stream from receiver track');
         const stream = new MediaStream([evt.receiver.track]);
         this.connection._remoteStream = stream;
         this.emit('stream', stream);
       } else {
-        console.warn('[MagpieNegotiator] ontrack fired but no streams or receiver track');
+        console.warn(this.TAG, 'ontrack fired but no streams or receiver track');
       }
     };
   }
@@ -183,7 +218,7 @@ export class MagpieNegotiator extends EventEmitter {
 
     try {
       const offer = await pc.createOffer();
-      console.log('[MagpieNegotiator] Offer created');
+      console.log(this.TAG, 'Offer created');
 
       // Apply SDP transform if provided (for codec selection)
       if (options.sdpTransform) {
@@ -191,7 +226,7 @@ export class MagpieNegotiator extends EventEmitter {
       }
 
       await pc.setLocalDescription(offer);
-      console.log('[MagpieNegotiator] Local description set');
+      console.log(this.TAG, 'Local description set');
 
       // Store last offer for testing/verification
       if (typeof window !== 'undefined') {
@@ -200,19 +235,20 @@ export class MagpieNegotiator extends EventEmitter {
 
       // Wait for ICE gathering to complete (magpie uses complete ICE gathering)
       if (options.waitForIceGathering !== false) {
-        console.log('[MagpieNegotiator] Waiting for ICE gathering...');
+        console.log(this.TAG, 'Waiting for ICE gathering...');
         await this._waitForIceGathering(options.iceGatheringTimeout || 5000);
-        console.log('[MagpieNegotiator] ICE gathering complete or timed out');
+        console.log(this.TAG, 'ICE gathering complete or timed out');
       }
 
-      console.log('[MagpieNegotiator] Emitting offer event');
+      console.log(this.TAG, 'Emitting offer event');
       this.emit('offer', {
         sdp: pc.localDescription,
-        connectionId: this.connection.id
       });
+      return pc.localDescription;
     } catch (err) {
-      console.error('[MagpieNegotiator] Failed to create offer:', err);
+      console.error(this.TAG, 'Failed to create offer:', err);
       this.connection.emit('error', { type: 'WebRTC', error: err });
+      throw err;
     }
   }
 
@@ -220,30 +256,30 @@ export class MagpieNegotiator extends EventEmitter {
    * Wait for ICE gathering to complete
    * Uses longer timeout for TURN allocation
    */
-  _waitForIceGathering(timeoutMs = 10000) {
+  async _waitForIceGathering(timeoutMs = 10000) {
     const pc = this.connection.peerConnection;
 
-    console.log('[MagpieNegotiator] ICE gathering state:', pc.iceGatheringState);
+    console.log(this.TAG, 'ICE gathering state:', pc.iceGatheringState);
 
     if (pc.iceGatheringState === 'complete') {
-      console.log('[MagpieNegotiator] ICE gathering already complete');
-      return Promise.resolve();
+      console.log(this.TAG, 'ICE gathering already complete');
+      return;
     }
 
-    return new Promise((resolve) => {
+    await new Promise((resolve) => {
       const startTime = Date.now();
 
       const timer = setTimeout(() => {
-        console.warn('[MagpieNegotiator] ICE gathering timeout after', timeoutMs, 'ms');
-        console.warn('[MagpieNegotiator] Collected candidates may not include TURN relay');
+        console.warn(this.TAG, 'ICE gathering timeout after', timeoutMs, 'ms');
+        console.warn(this.TAG, 'Collected candidates may not include TURN relay');
         resolve();
       }, timeoutMs);
 
       pc.addEventListener('icegatheringstatechange', () => {
-        console.log('[MagpieNegotiator] ICE gathering state changed to:', pc.iceGatheringState);
+        console.log(this.TAG, 'ICE gathering state changed to:', pc.iceGatheringState);
         if (pc.iceGatheringState === 'complete') {
           const elapsed = Date.now() - startTime;
-          console.log(`[MagpieNegotiator] ICE gathering complete in ${elapsed}ms`);
+          console.log(this.TAG, `ICE gathering complete in ${elapsed}ms`);
           clearTimeout(timer);
           resolve();
         }
@@ -252,43 +288,39 @@ export class MagpieNegotiator extends EventEmitter {
   }
 
   /**
-   * Handle incoming offer
+   * Handle incoming offer and Create and send answer
    */
-  async handleOffer(offer) {
+  async _makeAnswer(options) {
     const pc = this.connection.peerConnection;
 
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      await this._makeAnswer();
-    } catch (err) {
-      console.error('Failed to handle offer:', err);
-      this.connection.emit('error', { type: 'WebRTC', error: err });
-    }
-  }
-
-  /**
-   * Create and send answer
-   */
-  async _makeAnswer() {
-    const pc = this.connection.peerConnection;
-
-    try {
+      // First set remote offer.
+      const remoteDesc = typeof options.offer === 'string'
+        ? { type: 'offer', sdp: options.offer }
+        : options.offer;
+      await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+ 
+      // Then create local answer
       const answer = await pc.createAnswer();
 
-      // Apply SDP transform if needed
-      if (this.connection.options.sdpTransform) {
-        answer.sdp = this.connection.options.sdpTransform(answer.sdp) || answer.sdp;
-      }
-
+      // Then set local answer
       await pc.setLocalDescription(answer);
 
+      // Wait for ICE gathering to complete (magpie uses complete ICE gathering)
+      if (options.waitForIceGathering !== false) {
+        console.log(this.TAG, 'Waiting for ICE gathering...');
+        await this._waitForIceGathering(options.iceGatheringTimeout || 5000);
+        console.log(this.TAG, 'ICE gathering complete or timed out');
+      }
+
       this.emit('answer', {
-        sdp: answer,
-        connectionId: this.connection.id
+        sdp: pc.localDescription
       });
+      return pc.localDescription;
     } catch (err) {
       console.error('Failed to create answer:', err);
       this.connection.emit('error', { type: 'WebRTC', error: err });
+      throw err;
     }
   }
 
@@ -307,12 +339,12 @@ export class MagpieNegotiator extends EventEmitter {
         ? { type: 'answer', sdp: answer }
         : answer;
 
-      console.log('[MagpieNegotiator] Setting remote description');
+      console.log(this.TAG, 'Setting remote description');
       await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
       this.connection._open = true;
-      console.log('[MagpieNegotiator] Remote description set successfully');
+      console.log(this.TAG, 'Remote description set successfully');
     } catch (err) {
-      console.error('[MagpieNegotiator] Failed to handle answer:', err);
+      console.error(this.TAG, 'Failed to handle answer:', err);
       this.connection.emit('error', { type: 'WebRTC', error: err });
     }
   }
@@ -326,7 +358,7 @@ export class MagpieNegotiator extends EventEmitter {
     try {
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
-      console.error('[MagpieNegotiator] Failed to handle candidate:', err);
+      console.error(this.TAG, 'Failed to handle candidate:', err);
       this.connection.emit('error', { type: 'WebRTC', error: err });
     }
   }
@@ -342,7 +374,7 @@ export class MagpieNegotiator extends EventEmitter {
 
     const poll = () => {
       if (this.connection._remoteStream) {
-        console.log('[MagpieNegotiator] Stream already attached');
+        console.log(this.TAG, 'Stream already attached');
         return;
       }
 
@@ -351,7 +383,7 @@ export class MagpieNegotiator extends EventEmitter {
       const videoReceiver = receivers.find(r => r.track && r.track.kind === 'video');
 
       if (videoReceiver && videoReceiver.track) {
-        console.log(`[MagpieNegotiator] Found video track via polling (attempt ${attempts})`);
+        console.log(this.TAG, `Found video track via polling (attempt ${attempts})`);
         const stream = new MediaStream([videoReceiver.track]);
         this.connection._remoteStream = stream;
         this.emit('stream', stream);
@@ -361,7 +393,7 @@ export class MagpieNegotiator extends EventEmitter {
       if (attempts < maxAttempts) {
         setTimeout(poll, 100);
       } else {
-        console.warn('[MagpieNegotiator] Failed to find video track after', maxAttempts, 'attempts');
+        console.warn(this.TAG, 'Failed to find video track after', maxAttempts, 'attempts');
       }
     };
 
@@ -377,7 +409,7 @@ export class MagpieNegotiator extends EventEmitter {
 
     if (!pc) return;
 
-    console.log('[MagpieNegotiator] Cleaning up RTCPeerConnection');
+    console.log(this.TAG, 'Cleaning up RTCPeerConnection');
 
     // Remove all event listeners (fix memory leak)
     pc.onicecandidate = null;
@@ -393,6 +425,6 @@ export class MagpieNegotiator extends EventEmitter {
     }
 
     this.connection.peerConnection = null;
-    console.log('[MagpieNegotiator] RTCPeerConnection cleaned up');
+    console.log(this.TAG, 'RTCPeerConnection cleaned up');
   }
 }
