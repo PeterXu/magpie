@@ -525,10 +525,8 @@
       </div>
     </div>
   </div>
-  <script type="module">
-    import { MagpiePeer } from "/MagpiePeer.js";
-    import { MagpieInputEvents } from "/MagpieInputEvents.js";
-
+  <script src="/magpie-webrtc.js"></script>
+  <script>
     // ===== Token Verification =====
     const token = localStorage.getItem('token');
     if (!token) {
@@ -643,7 +641,7 @@
         const wsUrl = `${wsProtocol}//${location.host}/signaling?token=${encodeURIComponent(token)}`;
 
         // Create new peer with signaling URL
-        peer = new MagpiePeer({
+        peer = new MagpieWebrtc.MagpiePeer({
           url: wsUrl,
           reconnectInterval: 1000,
           maxReconnectAttempts: 5
@@ -776,7 +774,7 @@
       }
     }
 
-    const inputEvents = new MagpieInputEvents({send});
+    const inputEvents = new MagpieWebrtc.MagpieInputEvents({send});
     inputEvents.initSurfaceEvent(video);
     inputEvents.initContextMenu();
     inputEvents.initDocumentEvents();

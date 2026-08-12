@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '../public');
 const STREAMER_DIR = path.join(__dirname, '../streamer');
-const WEBRTC_DIR = path.join(__dirname, '../webrtc');
 
 const app = new Hono();
 
@@ -50,24 +49,6 @@ app.get('/streamer.html', async (c) => {
 app.get('/cursor.svg', async (c) => {
   const filePath = path.join(PUBLIC_DIR, 'cursor.svg');
   return serveStaticFile(c, filePath, 'image/svg+xml');
-});
-
-// WebRTC 模块文件
-const MODULE_FILES = {
-  '/codec-pick.js': { file: 'codec-pick.js', type: 'text/javascript' },
-  '/EventEmitter.js': { file: 'EventEmitter.js', type: 'text/javascript' },
-  '/MagpiePeer.js': { file: 'MagpiePeer.js', type: 'text/javascript' },
-  '/MagpieConnection.js': { file: 'MagpieConnection.js', type: 'text/javascript' },
-  '/MagpieNegotiator.js': { file: 'MagpieNegotiator.js', type: 'text/javascript' },
-  '/MagpieSignalChannel.js': { file: 'MagpieSignalChannel.js', type: 'text/javascript' },
-  '/MagpieInputEvents.js': { file: 'MagpieInputEvents.js', type: 'text/javascript' },
-};
-
-Object.entries(MODULE_FILES).forEach(([route, config]) => {
-  app.get(route, async (c) => {
-    const filePath = path.join(WEBRTC_DIR, config.file);
-    return serveStaticFile(c, filePath, config.type);
-  });
 });
 
 export { app };
