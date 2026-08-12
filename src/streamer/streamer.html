@@ -3,15 +3,16 @@
 <head><meta charset="utf-8"><title>magpie streamer</title></head>
 <body>
 <canvas id="c"></canvas>
+<script src="/magpie-webrtc.js"></script>
 <script>
-  const canvas = document.getElementById("c");
-  const ctx = canvas.getContext("2d");
-
   // 时间戳辅助函数
   function timestamp() {
     const now = new Date();
     return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
   }
+
+  const canvas = document.getElementById("c");
+  const wsUrl = location.origin.replace(/^http/, "ws") + "/internal";
 
   // Viewport + caps via query (?w=&h=&fps=&bitrate=&maxFps=&degradation=).
   const params = new URLSearchParams(location.search);
@@ -21,48 +22,22 @@
   const BITRATE = Number(params.get("bitrate")) || 0;      // sender maxBitrate (bps); 0 = unset
   const MAXFPS = Number(params.get("maxFps")) || 0;        // sender maxFramerate; 0 = unset
   const DEGRADATION = params.get("degradation") || "";     // sender degradationPreference; "" = unset
-  canvas.width = W; canvas.height = H;
   // Debug hook: parsed caps (matches the window.__* convention used elsewhere here).
   window.__magpieCfg = { FPS, BITRATE, MAXFPS, DEGRADATION };
 
-  let stream = canvas.captureStream(FPS);
+  const options = {canvas, wsUrl, W, H, FPS, BITRATE, MAXFPS, DEGRADATION}
+  const canvasMedia = new MagpieWebrtc.MagpieCanvasMedia(options);
+
+  let stream = null; //canvasMedia.createLocalStream();
+  canvasMedia.connectSource();
+  canvasMedia.startDrawLoop();
+
   let pc = null;
-
-  let lastFrame = null;
-  window.__internalWsConnected = false;
-  // Receive JPEG frames from Node and draw them.
-  function connectInternal() {
-    const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/internal");
-    ws.binaryType = "arraybuffer";
-    ws.onopen = () => {
-      window.__internalWsConnected = true;
-    };
-    ws.onmessage = async (e) => {
-      try {
-        const bmp = await createImageBitmap(new Blob([e.data]));
-        ctx.drawImage(bmp, 0, 0, W, H);
-        if (lastFrame) lastFrame.close();
-        lastFrame = bmp;
-      } catch {}
-    };
-    ws.onclose = () => {
-      window.__internalWsConnected = false;
-      setTimeout(connectInternal, 500);
-    };
-  }
-  connectInternal();
-
-  // Force the canvas to continuously update so captureStream generates frames
-  // even when no new JPEG frames arrive. This is needed because captureStream
-  // only generates frames when the canvas changes.
-  setInterval(() => {
-    if (lastFrame) {
-      ctx.drawImage(lastFrame, 0, 0);
-    }
-  }, 50);
 
   // Driven by Node via page.evaluate when a client offer arrives.
   window.relayOffer = async (offer, iceServers) => {
+    console.log("[Streamer] receive remote offer");
+  
     // 先关闭旧连接，等待资源释放
     if (pc) {
       try {
@@ -88,7 +63,7 @@
     }
 
     // 重新创建stream，避免使用ended的track
-    stream = canvas.captureStream(FPS);
+    stream = canvasMedia.createLocalStream();
     console.log(`[${timestamp()}] [Streamer] Created new stream, tracks: ${stream.getVideoTracks().length}`);
 
     pc = new RTCPeerConnection({ iceServers: iceServers || [] });
@@ -110,6 +85,7 @@
     // Wrapped: browser/timing quirks must not break the offer — fall back to defaults.
     if (BITRATE || MAXFPS || DEGRADATION) {
       try {
+        console.log('[Streamer] set sender params=', BITRATE, MAXFPS, DEGRADATION);
         const p = sender.getParameters();
         if (!p.encodings || !p.encodings.length) p.encodings = [{}];
         if (BITRATE) p.encodings[0].maxBitrate = BITRATE;
