@@ -545,15 +545,10 @@
     const statusDot = document.getElementById("statusDot");
     const statusText = document.getElementById("statusText");
 
+    const console = MagpieWebrtc.logger;
     let isConnected = false;
     let peer = null;
     let currentConnection = null;
-
-    // 时间戳辅助函数
-    function timestamp() {
-      const now = new Date();
-      return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
-    }
 
     // Panel switching logic (preserves connection state)
     window.switchPanel = function(panelName) {
@@ -634,7 +629,7 @@
 
     async function connect() {
       try {
-        console.log(`[${timestamp()}] [Client] Connecting...`);
+        console.log(`[Client] Connecting...`);
 
         // Create WebSocket URL with token parameter
         const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -649,7 +644,7 @@
 
         // Setup peer event handlers
         peer.on('open', (id, helloMsg) => {
-          console.log(`[${timestamp()}] [Client] Peer opened with ID: ${id}`);
+          console.log(`[Client] Peer opened with ID: ${id}`);
 
           // Apply initial nav state from hello message
           if (helloMsg) {
@@ -673,25 +668,25 @@
             try {
               navigator.clipboard.writeText(msg.text);
             } catch (err) {
-              console.error(`[${timestamp()}] Failed to write clipboard:`, err);
+              console.error(`Failed to write clipboard:`, err);
             }
           }
           else if (msg.t === "reload") location.reload();
         });
 
         peer.on('authenticationFailed', () => {
-          console.error(`[${timestamp()}] [Client] Authentication failed`);
+          console.error(`[Client] Authentication failed`);
           localStorage.removeItem('token');
           window.location.href = '/login.html';
         });
 
         peer.on('error', (err) => {
-          console.error(`[${timestamp()}] [Client] Peer error:`, err);
+          console.error(`[Client] Peer error:`, err);
           updateConnectionStatus(false);
         });
 
         peer.on('signalDisconnected', () => {
-          console.log(`[${timestamp()}] [Client] Signal disconnected`);
+          console.log(`[Client] Signal disconnected`);
           updateConnectionStatus(false);
 
           // Auto-reconnect if user initiated the connection
@@ -713,19 +708,19 @@
 
         // Setup connection event handlers
         currentConnection.on('stream', (remoteStream) => {
-          console.log(`[${timestamp()}] [Client] Received remote stream`);
+          console.log(`[Client] Received remote stream`);
           video.srcObject = remoteStream;
         });
 
         currentConnection.on('error', (err) => {
-          console.error(`[${timestamp()}] [Client] Connection error:`, err);
+          console.error(`[Client] Connection error:`, err);
         });
 
-        console.log(`[${timestamp()}] [Client] Connected successfully`);
+        console.log(`[Client] Open successfully`);
         updateConnectionStatus(true);
 
       } catch (err) {
-        console.error(`[${timestamp()}] [Client] Connection failed:`, err);
+        console.error(`[Client] Connection failed:`, err);
         updateConnectionStatus(false);
 
         // Cleanup on failure
@@ -733,7 +728,7 @@
           try {
             peer.disconnect();
           } catch (e) {
-            console.warn(`[${timestamp()}] Cleanup error:`, e);
+            console.warn(`Cleanup error:`, e);
           }
           peer = null;
         }
@@ -743,7 +738,7 @@
     }
 
     function disconnect() {
-      console.log(`[${timestamp()}] [Client] Disconnecting...`);
+      console.log(`[Client] Disconnecting...`);
       isConnected = false;
 
       // Cleanup peer (will close connection and signal)
@@ -751,7 +746,7 @@
         try {
           peer.disconnect();
         } catch (e) {
-          console.warn(`[${timestamp()}] Error disconnecting peer:`, e);
+          console.warn(`Error disconnecting peer:`, e);
         }
         peer = null;
       }
@@ -761,7 +756,7 @@
       // Clear video stream
       video.srcObject = null;
 
-      console.log(`[${timestamp()}] [Client] Disconnected`);
+      console.log(`[Client] Disconnected`);
       updateConnectionStatus(false);
     }
 
@@ -770,7 +765,7 @@
         peer.signal.send(obj);
       } else if (!silent) {
         // Only warn for important messages (not mouse events)
-        console.warn(`[${timestamp()}] Cannot send: not connected`);
+        console.warn(`Cannot send: not connected`);
       }
     }
 

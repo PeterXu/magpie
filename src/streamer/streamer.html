@@ -5,12 +5,7 @@
 <canvas id="c"></canvas>
 <script src="/magpie-webrtc.js"></script>
 <script>
-  // 时间戳辅助函数
-  function timestamp() {
-    const now = new Date();
-    return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
-  }
-
+  const console = MagpieWebrtc.logger;
   const canvas = document.getElementById("c");
   const wsUrl = location.origin.replace(/^http/, "ws") + "/internal";
 
@@ -26,20 +21,13 @@
   window.__magpieCfg = { FPS, BITRATE, MAXFPS, DEGRADATION };
 
   const options = {canvas, url: wsUrl, W, H, FPS, BITRATE, MAXFPS, DEGRADATION};
-  let peer = new MagpieWebrtc.MagpieStreamPeer();
+  let peer = new MagpieWebrtc.MagpiePeer();
   peer.setCanvasStream(options);
 
   window.relayOffer = async (message, iceServers) => {
-    console.log(`[${timestamp()}] [Streamer] receive remote offer from id=`, message.connectionId);
-    let answer = await peer.relayOffer(message.sdp, iceServers, options);
-
-    const hasRelay = answer.sdp.includes('typ relay');
-    console.log(`[${timestamp()}] [Streamer] ICE gathering has relay: ${hasRelay}`);
-    if (!hasRelay && iceServers && iceServers.length > 0) {
-      console.warn(`[${timestamp()}] [Streamer] WARNING: TURN configured but no relay candidate`);
-    }
-
-    return {connectionId: message.connectionId, sdp: answer.sdp};
+    console.log(`[StreamerPage] receive remote offer from id=`, message.connectionId);
+    let answer = await peer.relayOffer(message, iceServers, options);
+    return answer;
   };
 
   window.__ready = true;

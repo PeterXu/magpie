@@ -38,6 +38,14 @@ export class MagpieConnection extends EventEmitter {
     return this._remoteStream;
   }
 
+  get localDescription() {
+    return this.peerConnection ? this.peerConnection.localDescription : null;
+  }
+
+  get remotelDescription() {
+    return this.peerConnection ? this.peerConnection.remoteDescription : null;
+  }
+
   /**
    * Setup event forwarding from negotiator
    */

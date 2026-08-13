@@ -1,3 +1,8 @@
+function timestamp() {
+  const now = new Date();
+  return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+}
+
 export class StreamerPeer {
   constructor({ browser }) {
     this._browser = browser;
@@ -49,6 +54,18 @@ export class StreamerPeer {
 
   setFrameSocket(ws) {
     this._frameSocket = ws;
+
+    // Handle incoming WebSocket messages from internal
+    ws.on('message', async (raw) => {
+      let msg;
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return; // Ignore malformed JSON
+      }
+
+      console.log(`[Streamer] log: [${timestamp()}]`, '[InternalWebsocket] recevied message type:', msg.t || msg.type);
+    });
   }
 
   async pushFrame(jpegBuffer) {

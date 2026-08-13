@@ -19,6 +19,24 @@ export function createInternalRoute({ streamerPeer }) {
   const wsServer = new WebSocketServer({ noServer: true });
 
   wsServer.on('connection', (ws) => {
+    // Helper to safely send JSON messages
+    const send = (obj) => {
+      if (ws.readyState === ws.OPEN) {
+        try {
+          ws.send(JSON.stringify(obj));
+        } catch (e) {
+          // Ignore send errors - connection may have closed
+        }
+      }
+    };
+
+    void (async () => {
+      send({
+        t: 'hello',
+        id: 'internal'
+      });
+    })();
+
     // Pass the WebSocket to StreamerPeer for frame relay
     streamerPeer.setFrameSocket(ws);
   });

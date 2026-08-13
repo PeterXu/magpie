@@ -11,9 +11,6 @@ export class MagpieCanvasMedia extends EventEmitter {
     this.ctx = this.canvas.getContext("2d");
 
     this.url = options.url;
-    this.ws = null;
-    this.wsConnected = false;
-
     this._pendingData = null;
     this._processing = false;
     this.drawIntervalId = -1;
@@ -42,30 +39,6 @@ export class MagpieCanvasMedia extends EventEmitter {
   createLocalStream() {
     console.log(this.TAG, `capture stream fps=`, this.params.FPS);
     return this.canvas.captureStream(this.params.FPS);
-  }
-
-  // Receive JPEG frames from Node and draw them.
-  connectSource() {
-    console.log(this.TAG, 'create ws connection to receive frames');
-  
-    if (!!this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
-
-    const ws = new WebSocket(this.url);
-    ws.binaryType = "arraybuffer";
-    ws.onopen = () => {
-      this.wsConnected = true;
-      console.log(this.TAG, 'ws connected url=', this.url);
-    };
-    ws.onmessage = async (e) => {await this.feedImage(e.data);};
-    ws.onclose = () => {
-      console.log(this.TAG, 'ws closed');
-      this.wsConnected = false;
-    };
-
-    this.ws = ws;
   }
 
   async feedImage(data) {
@@ -103,11 +76,6 @@ export class MagpieCanvasMedia extends EventEmitter {
   destroy() {
     clearInterval(this.drawIntervalId);
     this.drawIntervalId = -1;
-
-    if (this.ws) {
-        this.ws.close();
-        this.ws = null;
-    }
 
     if (this.lastFrame) {
         this.lastFrame.close();

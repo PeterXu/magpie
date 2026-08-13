@@ -44,12 +44,12 @@ export class MagpiePeer extends EventEmitter {
     return this._disconnected;
   }
 
-  async setCanvasStream(options) {
+  setCanvasStream(options) {
     this.canvasMedia = new MagpieCanvasMedia(options);
     this.canvasMedia.startDrawLoop();
 
     // create signal channel for receiving frame
-    await this._createSignalConnect(options);
+    this._createSignalConnect(options);
   }
 
   async relayOffer(message, iceServers, params) {
@@ -61,6 +61,8 @@ export class MagpiePeer extends EventEmitter {
       iceServers,
       ...params
     });
+  
+    return {connectionId: message.connectionId, sdp: connection.localDescription.sdp};
   }
 
   initSignalChannel(options = {}) {
@@ -243,7 +245,7 @@ export class MagpiePeer extends EventEmitter {
    * Handle hello message from server
    */
   _handleHello(message) {
-    console.log(this.TAG, 'Received hello');
+    console.log(this.TAG, 'Received hello', message);
 
     // Update ICE servers if provided
     if (message.iceServers) {
@@ -345,7 +347,7 @@ export class MagpiePeer extends EventEmitter {
       pending.forEach(msg => connection.handleMessage(msg));
       this._pendingMessages.delete(connection.id);
     }
-
+  
     // Forward connection signals
     connection.on('iceCandidate', (data) => {
       this.signal.send({
