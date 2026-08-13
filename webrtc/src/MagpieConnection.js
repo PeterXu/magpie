@@ -42,7 +42,7 @@ export class MagpieConnection extends EventEmitter {
     return this.peerConnection ? this.peerConnection.localDescription : null;
   }
 
-  get remotelDescription() {
+  get remoteDescription() {
     return this.peerConnection ? this.peerConnection.remoteDescription : null;
   }
 

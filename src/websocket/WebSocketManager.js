@@ -27,12 +27,39 @@ export class WebSocketManager {
   broadcast(obj) {
     const msg = JSON.stringify(obj);
     for (const ws of this.clients) {
-      if (ws.readyState === ws.OPEN) {
+      if (!!ws.peerId && ws.readyState === ws.OPEN) {
         try {
           ws.send(msg);
         } catch (e) {
           // Ignore send errors - connection may have closed during iteration
         }
+      }
+    }
+  }
+
+  destory() {
+    for (const ws of this.clients) {
+      try {ws.close()} catch(e) {}
+    }
+    this.clients.clear();
+  }
+
+  setPeer(id, ws) {
+     ws.peerId = id;
+  }
+
+  forwardPeer(id, obj) {
+    const msg = JSON.stringify(obj);
+    for (const ws of this.clients) {
+      if (ws.peerId == id) {
+        if (ws.readyState === ws.OPEN) {
+          try {
+            ws.send(msg);
+          } catch (e) {
+            // Ignore send errors - connection may have closed during iteration
+          }
+        }
+        break;
       }
     }
   }

@@ -22,7 +22,7 @@ import { SessionHandler } from '../../handlers/signaling/SessionHandler.js';
  * @returns {Object} Object with wsServer and setup function
  */
 export function createSignalingRoute({ browserSession, streamerPeer, inputChannel, clientIceServers, wsManager }) {
-  const handler = new SessionHandler({ browserSession, streamerPeer, inputChannel });
+  const handler = new SessionHandler({ browserSession, streamerPeer, inputChannel, clientIceServers });
   const wsServer = new WebSocketServer({ noServer: true });
 
   wsServer.on('connection', (ws) => {
@@ -52,29 +52,19 @@ export function createSignalingRoute({ browserSession, streamerPeer, inputChanne
       try {
         const response = await handler.handle(msg);
         if (response) {
-          send(response);
+          switch (response.t) {
+            case 'hello':
+              wsManager.setPeer(response.id, ws);
+              send(response);
+              break;
+            default:
+              send(response);
+          }
         }
       } catch (err) {
         send({ t: 'error', error: String((err && err.message) || err) });
       }
     });
-
-    // Send hello message immediately after connection
-    void (async () => {
-      const nav = await browserSession.getNavState();
-      const tabs = browserSession.getTabsState();
-      send({
-        t: 'hello',
-        viewport: browserSession.getViewport(),
-        url: nav.url,
-        canBack: nav.canBack,
-        canForward: nav.canForward,
-        iceServers: clientIceServers,
-        magpieCodecs: streamerPeer.getSenderCodecs(),
-        pages: tabs.pages,
-        activeId: tabs.activeId
-      });
-    })();
   });
 
   return { wsServer, path: '/signaling' };

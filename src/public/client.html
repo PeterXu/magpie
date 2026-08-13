@@ -761,9 +761,8 @@
     }
 
     function send(obj, silent = false) {
-      if (peer && peer.signal && peer.signal.isConnected()) {
-        peer.signal.send(obj);
-      } else if (!silent) {
+      const ret = peer ? peer.sendMessage(obj) : false;
+      if (!ret && !silent) {
         // Only warn for important messages (not mouse events)
         console.warn(`Cannot send: not connected`);
       }

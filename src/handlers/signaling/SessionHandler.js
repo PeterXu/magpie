@@ -1,3 +1,5 @@
+import console from '../../utils/logger.js';
+
 /**
  * SessionHandler - WebSocket message handler for session management
  *
@@ -6,10 +8,11 @@
  * and provides a unified handle(msg) method for all message types.
  */
 export class SessionHandler {
-  constructor({ browserSession, streamerPeer, inputChannel }) {
+  constructor({ browserSession, streamerPeer, inputChannel, clientIceServers }) {
     this.browserSession = browserSession;
     this.streamerPeer = streamerPeer;
     this.inputChannel = inputChannel;
+    this.clientIceServers = clientIceServers;
   }
 
   /**
@@ -19,6 +22,8 @@ export class SessionHandler {
    */
   async handle(msg) {
     switch (msg.t) {
+      case 'hi':
+        return this.handleHi(msg);
       case 'offer':
         return this.handleOffer(msg);
       case 'navigate':
@@ -46,6 +51,27 @@ export class SessionHandler {
       default:
         throw new Error(`Unknown message type: ${msg.t}`);
     }
+  }
+
+  async handleHi(msg) {
+    const id = Math.random().toString(36).substring(2);
+    console.log('[SignalHandler]', 'Receive HI message and alloate id=', id);
+
+    const nav = await this.browserSession.getNavState();
+    const tabs = this.browserSession.getTabsState();
+    const reply = {
+      t: 'hello',
+      id: `peer_${id}`,
+      viewport: this.browserSession.getViewport(),
+      url: nav.url,
+      canBack: nav.canBack,
+      canForward: nav.canForward,
+      iceServers: this.clientIceServers,
+      magpieCodecs: this.streamerPeer.getSenderCodecs(),
+      pages: tabs.pages,
+      activeId: tabs.activeId
+    };
+    return reply;
   }
 
   /**

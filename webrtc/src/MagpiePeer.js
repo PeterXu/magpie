@@ -49,7 +49,7 @@ export class MagpiePeer extends EventEmitter {
     this.canvasMedia.startDrawLoop();
 
     // create signal channel for receiving frame
-    this._createSignalConnect(options);
+    this._createSignalConnect(options).catch(err => console.error(this.TAG, err));
   }
 
   async relayOffer(message, iceServers, params) {
@@ -84,6 +84,7 @@ export class MagpiePeer extends EventEmitter {
     this.signal.on('connected', () => {
       console.log(this.TAG, 'Signal channel connected');
       this._disconnected = false;
+      this._sendHiMessage();
       this.emit('signalConnected');
     });
 
@@ -245,7 +246,7 @@ export class MagpiePeer extends EventEmitter {
    * Handle hello message from server
    */
   _handleHello(message) {
-    console.log(this.TAG, 'Received hello', message);
+    console.log(this.TAG, 'Received hello', message.id);
 
     // Update ICE servers if provided
     if (message.iceServers) {
@@ -335,6 +336,23 @@ export class MagpiePeer extends EventEmitter {
     this.emit('call', connection);
   }
 
+  sendMessage(data) {
+    return this.signal.send({
+      id: this._id,
+      ...data,
+    });
+  }
+
+  /**
+   * Send hi to magpie for registering
+   */
+  _sendHiMessage() {
+    this.signal.send({
+      t: 'hi',
+      //token
+    });
+  }
+
   /**
    * Add connection to management
    */
@@ -350,7 +368,7 @@ export class MagpiePeer extends EventEmitter {
   
     // Forward connection signals
     connection.on('iceCandidate', (data) => {
-      this.signal.send({
+      this.sendMessage({
         t: 'candidate',
         candidate: data.candidate,
         connectionId: connection.id
@@ -359,7 +377,7 @@ export class MagpiePeer extends EventEmitter {
 
     connection.on('offer', (data) => {
       console.log(this.TAG, 'Sending offer with id=', connection.id);
-      this.signal.send({
+      this.sendMessage({
         t: 'offer',
         sdp: data.sdp.sdp || data.sdp,
         connectionId: connection.id
@@ -367,7 +385,7 @@ export class MagpiePeer extends EventEmitter {
     });
 
     connection.on('answer', (data) => {
-      this.signal.send({
+      this.sendMessage({
         t: 'answer',
         sdp: data.sdp.sdp || data.sdp,
         connectionId: connection.id

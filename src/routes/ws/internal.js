@@ -30,12 +30,26 @@ export function createInternalRoute({ streamerPeer }) {
       }
     };
 
-    void (async () => {
-      send({
-        t: 'hello',
-        id: 'internal'
-      });
-    })();
+    // Handle incoming WebSocket messages from internal
+    ws.on('message', async (raw) => {
+      let msg;
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return; // Ignore malformed JSON
+      }
+
+      try {
+        const response = await streamerPeer.handle(msg);
+        if (response) {
+          send(response);
+        }
+      } catch (err) {
+        send({ t: 'error', error: String((err && err.message) || err) });
+      }
+    });
+
+    ws.on('close', () => streamerPeer.setFrameSocket(null));
 
     // Pass the WebSocket to StreamerPeer for frame relay
     streamerPeer.setFrameSocket(ws);
