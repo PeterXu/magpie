@@ -25,6 +25,7 @@ export class BrowserSession {
     this._resolveNewPageId = null;  // resolver for newPage() to wait for registration
     this._newPageInProgress = false; // lock to prevent concurrent newPage() calls
     this._crashFired = false;
+    this._intentionalStop = false;
     this._onPageCrash = null;
     this._onBrowserDisconnect = null;
     this._onFrameNavigated = null;
@@ -249,6 +250,7 @@ export class BrowserSession {
 
   async start() {
     this._crashFired = false;
+    this._intentionalStop = false;
     if (this._injectedBrowser) {
       this._browser = this._injectedBrowser;
       this._ownsBrowser = false;
@@ -294,8 +296,13 @@ export class BrowserSession {
       await this._page.goto(this._url, { waitUntil: "domcontentloaded" });
     }
 
-    // Crash handling for browser disconnect (page crash handled in _registerPage)
-    this._onBrowserDisconnect = () => this._handleCrash();
+    // Crash handling for browser disconnect (page crash handled in _registerPage).
+    // `disconnected` also fires on an intentional close() — guarded by _intentionalStop
+    // so a deliberate stop() isn't misread as a crash.
+    this._onBrowserDisconnect = () => {
+      if (this._intentionalStop) return;
+      this._handleCrash();
+    };
     this._browser.on("disconnected", this._onBrowserDisconnect);
   }
 
@@ -311,6 +318,7 @@ export class BrowserSession {
   }
 
   async stop() {
+    this._intentionalStop = true;
     await this.stopScreencast();
     // Close all pages
     for (const entry of this._pages.values()) {

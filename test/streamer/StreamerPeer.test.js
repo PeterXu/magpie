@@ -54,9 +54,14 @@ test("StreamerPeer: relays offer and streams pushed frames to a client peer", as
   const port = httpServer.address().port;
 
   try {
-    const sp = new StreamerPeer({ browser });
+    // Mock browserSession that returns the browser
+    const mockBrowserSession = {
+      getBrowser: () => browser,
+      startScreencast: async () => {}
+    };
+    const sp = new StreamerPeer();
     internalWss.on("connection", (ws) => sp.setFrameSocket(ws));
-    await sp.start({ streamerUrl: `http://127.0.0.1:${port}/streamer.html?w=16&h=16` });
+    await sp.start({ browserSession: mockBrowserSession, streamerUrl: `http://127.0.0.1:${port}/streamer.html?w=16&h=16` });
 
     // Client peer (real libwebrtc) in a second page.
     const clientPage = await browser.newPage();

@@ -13,7 +13,8 @@ services:
     environment:
       # Docker 安全配置（硬编码，不可覆盖）
       - MAGPIE_NO_SANDBOX=1
-      - MAGPIE_DEBUG_STREAMER=1
+      - MAGPIE_DEBUG_STREAMER=${MAGPIE_DEBUG_STREAMER:-1}
+      - MAGPIE_IDLE_TIMEOUT=${MAGPIE_IDLE_TIMEOUT:-30}
       # 服务器配置（可从 .env 覆盖）
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-8080}

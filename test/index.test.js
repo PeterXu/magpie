@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildStreamerUrl } from "../src/index.js";
+import { buildStreamerUrl } from "../src/config.js";
 
 test("buildStreamerUrl: w/h/fps always present; caps only when set", () => {
-  const url = buildStreamerUrl("http://127.0.0.1:8080", {
+  const url = buildStreamerUrl("http://127.0.0.1:8080", "streamer.html", {
     viewport: { width: 1280, height: 800 },
     screencast: { quality: 80 },
     webrtc: { streamFps: 10, maxBitrate: null, maxFramerate: null, degradation: null },
@@ -12,7 +12,7 @@ test("buildStreamerUrl: w/h/fps always present; caps only when set", () => {
 });
 
 test("buildStreamerUrl: includes bitrate/maxFps/degradation when set", () => {
-  const url = buildStreamerUrl("http://h:1", {
+  const url = buildStreamerUrl("http://h:1", "streamer.html", {
     viewport: { width: 640, height: 480 },
     screencast: { quality: 80 },
     webrtc: { streamFps: 20, maxBitrate: 2500000, maxFramerate: 15, degradation: "maintain-resolution" },

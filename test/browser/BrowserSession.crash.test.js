@@ -58,3 +58,20 @@ test("BrowserSession: onCrash guard resets after restart", async () => {
     await session.stop();
   }
 });
+
+test("BrowserSession: intentional stop() must not fire onCrash", async () => {
+  const session = new BrowserSession({ url: FIXTURE, width: 400, height: 300 });
+  await session.start();
+  let crashed = 0;
+  session.onCrash = () => { crashed++; };
+  await session.stop();  // close() fires 'disconnected' — must be ignored
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(crashed, 0, "intentional stop should not be treated as a crash");
+
+  // Real crash after a fresh start must still fire.
+  await session.start();
+  session._browser.close();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(crashed, 1, "unexpected disconnect after start should fire onCrash");
+  await session.stop();
+});

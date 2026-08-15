@@ -22,15 +22,19 @@
 
   const options = {canvas, url: wsUrl, W, H, FPS, BITRATE, MAXFPS, DEGRADATION};
   let peer = new MagpieWebrtc.MagpiePeer();
+
+  // Wait for WebSocket connection before signaling ready
   peer.setCanvasStream(options);
+  peer.on('signalConnected', () => {
+    console.log('[StreamerPage] WebSocket connected, signaling ready');
+    window.__ready = true;
+  });
 
   window.relayOffer = async (message, iceServers) => {
     console.log(`[StreamerPage] receive remote offer from id=`, message.connectionId);
     let answer = await peer.relayOffer(message, iceServers, options);
     return answer;
   };
-
-  window.__ready = true;
 </script>
 </body>
 </html>

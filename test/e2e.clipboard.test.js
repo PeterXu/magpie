@@ -17,7 +17,7 @@ async function boot() {
   const browser = await chromium.launch({ headless: true });
   const browserSession = new BrowserSession({ url: FIXTURE, width: 400, height: 300, browser });
   await browserSession.start();
-  const streamerPeer = new StreamerPeer({ browser });
+  const streamerPeer = new StreamerPeer();  // URL known after listen()
   const inputChannel = new InputChannel({ browserSession });
 
   // Create WebSocket manager
@@ -63,7 +63,7 @@ async function boot() {
   });
 
   const base = `http://127.0.0.1:${server.address().port}`;
-  await streamerPeer.start({ streamerUrl: `${base}/streamer.html?w=400&h=300` });
+  await streamerPeer.start({ browserSession, streamerUrl: `${base}/streamer.html?w=400&h=300` });
   await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
   return { browser, browserSession, streamerPeer, inputChannel, server, base };
 }

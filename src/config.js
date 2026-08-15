@@ -2,6 +2,7 @@
 // Same family as coords.js / keys.js / ice-servers.js — pure & unit-tested.
 // NEVER throws: bad env is clamped/fallback + console.warn, so the crash→restart
 // loop can't be bricked by a typo'd env value.
+import { buildIceServers } from "./utils/ice-servers.js";
 
 const DEFAULTS = { WIDTH: 1280, HEIGHT: 800, QUALITY: 80, FPS: 10 };
 const RANGE = {
@@ -59,6 +60,18 @@ export function resolveMaxBitrate(raw, width, height) {
   return bps <= 0 ? null : bps;
 }
 
+export function buildStreamerUrl(base, indexHtml, c) {
+  const w = c.webrtc;
+  const parts = [
+    `w=${c.viewport.width}`,
+    `h=${c.viewport.height}`,
+    `fps=${w.streamFps}`,
+  ];
+  if (w.maxBitrate) parts.push(`bitrate=${w.maxBitrate}`);
+  if (w.maxFramerate) parts.push(`maxFps=${w.maxFramerate}`);
+  if (w.degradation) parts.push(`degradation=${w.degradation}`);
+  return `${base}/${indexHtml}?${parts.join("&")}`;
+}
 
 export function loadConfig(env = process.env) {
   const width  = clampInt(env.MAGPIE_WIDTH,  DEFAULTS.WIDTH,  RANGE.WIDTH,  "MAGPIE_WIDTH");
@@ -83,7 +96,7 @@ export function loadConfig(env = process.env) {
     else console.warn(`magpie: MAGPIE_DEGRADATION=${degRaw} invalid, using default`);
   }
 
-  return {
+  const baseCfg = {
     viewport: { width, height },
     screencast: { quality },
     webrtc: {
@@ -92,16 +105,46 @@ export function loadConfig(env = process.env) {
       maxFramerate,
       degradation
     },
+    DEFAULT_URL: env.MAGPIE_URL ?? "about:blank",
+    IDLE_TIMEOUT_MINUTES: Number(env.MAGPIE_IDLE_TIMEOUT ?? 30),
   };
-}
 
-// Auth config loader: reads MAGPIE_ADMIN_* env, returns structured auth cfg.
-// Never throws: missing/invalid values fall back to safe defaults.
-export function loadAuthConfig(env = process.env) {
+  const netCfg = {
+    PORT: Number(env.PORT ?? 8080),
+    HOST: env.HOST ?? "0.0.0.0",
+    HOST_IP: env.MAGPIE_HOST_IP ?? "",
+    TURN_USER: env.MAGPIE_TURN_USER ?? "magpie",
+    TURN_PASS: env.MAGPIE_TURN_PASS ?? "magpie",
+    TURN_HOST: env.MAGPIE_TURN_HOST ?? "iceturn" // Container name for Docker, or custom TURN host
+  };
+
+  const authCfg = {
+    ADMIN_USER: env.MAGPIE_ADMIN_USER || "admin",
+    ADMIN_PASSWORD: env.MAGPIE_ADMIN_PASSWORD || "",
+    JWT_SECRET: env.MAGPIE_JWT_SECRET || "",
+    JWT_EXPIRES_IN: parseInt(env.MAGPIE_JWT_EXPIRES_IN || "86400", 10)
+  };
+
   return {
-    adminUser: env.MAGPIE_ADMIN_USER || "admin",
-    adminPassword: env.MAGPIE_ADMIN_PASSWORD || "",
-    jwtSecret: env.MAGPIE_JWT_SECRET || "",
-    jwtExpiresIn: parseInt(env.MAGPIE_JWT_EXPIRES_IN || "86400", 10)
+    // base config
+    ...baseCfg,
+    buildStreamerUrl: (indexHtml) => {
+      const base = `http://127.0.0.1:${netCfg.PORT}`;
+      return buildStreamerUrl(base, indexHtml, baseCfg);
+    },
+
+    // net config
+    net: netCfg,
+    serverIceServers: () => {
+      return netCfg.HOST_IP ? buildIceServers({
+        host: netCfg.TURN_HOST, user: netCfg.TURN_USER, pass: netCfg.TURN_PASS
+      }) : [];
+    },
+    clientIceServers: () => {
+      return buildIceServers({ host: netCfg.HOST_IP, user: netCfg.TURN_USER, pass: netCfg.TURN_PASS });
+    },
+
+    // auth config
+    auth: authCfg
   };
 }

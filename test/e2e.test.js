@@ -15,64 +15,75 @@ const FIXTURE = pathToFileURL(path.join(process.cwd(), "test", "fixtures", "clic
 
 async function boot() {
   const browser = await chromium.launch({ headless: true });
-  const browserSession = new BrowserSession({ url: FIXTURE, width: 400, height: 300, browser });
-  await browserSession.start();
-  const streamerPeer = new StreamerPeer({ browser });
-  const inputChannel = new InputChannel({ browserSession });
+  // If anything below throws mid-boot, tear down what we already own.
+  // Leaked handles (browser, http server) keep the event loop alive and hang
+  // node --test.
+  let browserSession = null;
+  let server = null;
+  try {
+    browserSession = new BrowserSession({ url: FIXTURE, width: 400, height: 300, browser });
+    await browserSession.start();
+    const streamerPeer = new StreamerPeer();  // URL known after listen()
+    const inputChannel = new InputChannel({ browserSession });
 
-  // Create WebSocket manager
-  const wsManager = new WebSocketManager();
+    // Create WebSocket manager
+    const wsManager = new WebSocketManager();
 
-  // Create Hono app with empty auth config (no auth required for e2e tests)
-  const { app, wsRoutes } = createApp({
-    browserSession,
-    streamerPeer,
-    inputChannel,
-    clientIceServers: [],
-    wsManager,
-    env: {
-      ADMIN_USER: 'admin',
-      ADMIN_PASSWORD: '',  // Empty password disables auth
-      JWT_SECRET: 'test-secret',
-      JWT_EXPIRES_IN: 86400
-    }
-  });
-
-  // Start server using Hono's serve function
-  const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
-
-  // Handle WebSocket upgrades
-  server.on('upgrade', (request, socket, head) => {
-    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
-
-    for (const { wsServer, path } of wsRoutes) {
-      if (pathname === path) {
-        wsServer.handleUpgrade(request, socket, head, (ws) => {
-          wsServer.emit('connection', ws, request);
-        });
-        return;
+    // Create Hono app with empty auth config (no auth required for e2e tests)
+    const { app, wsRoutes } = createApp({
+      browserSession,
+      streamerPeer,
+      inputChannel,
+      clientIceServers: [],
+      wsManager,
+      env: {
+        ADMIN_USER: 'admin',
+        ADMIN_PASSWORD: '',  // Empty password disables auth
+        JWT_SECRET: 'test-secret',
+        JWT_EXPIRES_IN: 86400
       }
+    });
+
+    // Start server using Hono's serve function
+    server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
+
+    // Handle WebSocket upgrades
+    server.on('upgrade', (request, socket, head) => {
+      const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+
+      for (const { wsServer, path } of wsRoutes) {
+        if (pathname === path) {
+          wsServer.handleUpgrade(request, socket, head, (ws) => {
+            wsServer.emit('connection', ws, request);
+          });
+          return;
+        }
+      }
+
+      socket.destroy();
+    });
+
+    // Wait for server to be ready
+    await new Promise((resolve) => {
+      server.on('listening', resolve);
+      // Timeout after 1 second if listening event doesn't fire
+      setTimeout(resolve, 100);
+    });
+
+    const address = server.address();
+    if (!address) {
+      throw new Error('Server not listening');
     }
 
-    socket.destroy();
-  });
-
-  // Wait for server to be ready
-  await new Promise((resolve) => {
-    server.on('listening', resolve);
-    // Timeout after 1 second if listening event doesn't fire
-    setTimeout(resolve, 100);
-  });
-
-  const address = server.address();
-  if (!address) {
-    throw new Error('Server not listening');
+    const base = `http://127.0.0.1:${address.port}`;
+    await streamerPeer.start({ browserSession, streamerUrl: `${base}/streamer.html?w=400&h=300` });
+    return { browser, browserSession, streamerPeer, server, base };
+  } catch (err) {
+    try { if (server) server.close(); } catch {}
+    try { if (browserSession) await browserSession.stop(); } catch {}
+    try { await browser.close(); } catch {}
+    throw err;
   }
-
-  const base = `http://127.0.0.1:${address.port}`;
-  await streamerPeer.start({ streamerUrl: `${base}/streamer.html?w=400&h=300` });
-  await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
-  return { browser, browserSession, streamerPeer, server, base };
 }
 
 test("e2e: client sees video and a click reaches the target page", async () => {

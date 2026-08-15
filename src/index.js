@@ -3,80 +3,114 @@ import { StreamerPeer } from "./streamer/StreamerPeer.js";
 import { InputChannel } from "./utils/InputChannel.js";
 import { createApp, serve } from "./app.js";
 import { WebSocketManager } from "./websocket/WebSocketManager.js";
-import { buildIceServers } from "./utils/ice-servers.js";
-import { loadConfig, loadAuthConfig } from "./config.js";
+import { loadConfig } from "./config.js";
 import { loadEnvFile } from "./env.js";
+import { IdleTimeoutManager } from "./utils/IdleTimeoutManager.js";
 import { fileURLToPath } from "node:url";
 
 // Populate process.env from .env (cwd) before any env is read. Real/shell env
 // wins over the file. Dependency-free — see src/env.js.
 loadEnvFile();
 
-const PORT = Number(process.env.PORT ?? 8080);
-const HOST = process.env.HOST ?? "0.0.0.0";
-const DEFAULT_URL = process.env.MAGPIE_URL ?? "about:blank";
+// Load config
 const cfg = loadConfig();
-const HOST_IP = process.env.MAGPIE_HOST_IP ?? "";
-const TURN_USER = process.env.MAGPIE_TURN_USER ?? "magpie";
-const TURN_PASS = process.env.MAGPIE_TURN_PASS ?? "magpie";
-const TURN_HOST = process.env.MAGPIE_TURN_HOST ?? "iceturn"; // Container name for Docker, or custom TURN host
 
-// Server-side peer (streamer page) reaches TURN by container name (Docker internal);
-// client-side peer reaches it via the host IP. Both empty when HOST_IP unset
-// (native run -> pure host candidates).
-const serverIceServers = HOST_IP ? buildIceServers({ host: TURN_HOST, user: TURN_USER, pass: TURN_PASS }) : [];
-const clientIceServers = buildIceServers({ host: HOST_IP, user: TURN_USER, pass: TURN_PASS });
+function createBrowserSession({ wsManager, streamerPeer }) {
+  const browserSession = new BrowserSession({ url: cfg.DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, screencast: cfg.screencast });
+  
+  // URL-bar sync: every main-frame navigation in the remote page (Go,
+  // back/forward/reload, or a passive link-click) broadcasts the new nav state
+  // to all clients. See the BrowserSession framenavigated listener.
+  browserSession.onUrlChange = (nav) => wsManager.broadcast({ t: "nav", ...nav });
 
-// 验证ICE servers配置
-console.log('[ICE Config] HOST_IP:', HOST_IP || '(not set)');
-console.log('[ICE Config] clientIceServers:', JSON.stringify(clientIceServers));
+  // Tab state broadcast: fire whenever pages are opened/closed/switched or
+  // titles change. Clients render the tab bar from this.
+  browserSession.onTabsChange = (state) => wsManager.broadcast({ t: "tabs", ...state });
 
-// Pure: build the streamer page URL from cfg. Exported for unit testing.
-export function buildStreamerUrl(base, c) {
-  const w = c.webrtc;
-  const parts = [
-    `w=${c.viewport.width}`,
-    `h=${c.viewport.height}`,
-    `fps=${w.streamFps}`,
-  ];
-  if (w.maxBitrate) parts.push(`bitrate=${w.maxBitrate}`);
-  if (w.maxFramerate) parts.push(`maxFps=${w.maxFramerate}`);
-  if (w.degradation) parts.push(`degradation=${w.degradation}`);
-  return `${base}/streamer.html?${parts.join("&")}`;
+  // Handle clipboard changes from remote browser
+  browserSession.onClipboardChange = (data) => {
+    wsManager.broadcast({ t: "clipboard", text: data.text });
+  };
+
+  browserSession.onCrash = async () => {
+    try { await streamerPeer.stop(); } catch (err) { console.error("onCrash: streamerPeer stop failed", err); }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
+    wsManager.broadcast({ t: "reload" });
+    try { await streamerPeer.start({ browserSession }); } catch (err) { console.error("onCrash: streamerPeer start failed", err); }
+  };
+
+  return browserSession;
 }
 
 async function main() {
-  const browserSession = new BrowserSession({ url: DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, screencast: cfg.screencast });
-  await browserSession.start();
-
-  const streamerPeer = new StreamerPeer({ browser: browserSession.getBrowser() });
-  const inputChannel = new InputChannel({ browserSession });
+  // Server-side peer (streamer page) reaches TURN by container name (Docker internal);
+  // client-side peer reaches it via the host IP. Both empty when HOST_IP unset
+  // (native run -> pure host candidates).
+  // 验证ICE servers配置
+  console.log('[ICE Config] HOST_IP:', cfg.net.HOST_IP || '(not set)');
+  console.log('[ICE Config] clientIceServers:', JSON.stringify(cfg.clientIceServers()));
 
   // Create WebSocket manager for broadcasting
   const wsManager = new WebSocketManager();
 
-  // Load auth config and prepare env
-  const authConfig = loadAuthConfig();
-  const env = {
-    ADMIN_USER: authConfig.adminUser,
-    ADMIN_PASSWORD: authConfig.adminPassword,
-    JWT_SECRET: authConfig.jwtSecret,
-    JWT_EXPIRES_IN: authConfig.jwtExpiresIn
+  // Create SteamerPeer for streamer.html
+  const streamerPeer = new StreamerPeer({
+    streamerUrl: cfg.buildStreamerUrl('streamer.html'),
+    iceServers: cfg.serverIceServers()
+  });
+
+  // Create BrowserSession
+  const browserSession = createBrowserSession({ wsManager, streamerPeer });
+
+  // Create InputChannel for processing BrowserSession events
+  const inputChannel = new InputChannel({ browserSession });
+
+  // Create idle timeout manager
+  const idleTimeoutManager = new IdleTimeoutManager({
+    timeoutMinutes: cfg.IDLE_TIMEOUT_MINUTES
+  });
+
+  // Listen for connection changes
+  wsManager.on('connection-change', (clientCount) => {
+    idleTimeoutManager.handleConnectionChange(clientCount);
+  });
+
+  // Handle idle timeout stop event
+  idleTimeoutManager.onStop = async () => {
+    try {
+      await streamerPeer.stop();
+      await browserSession.stop();
+    } catch (err) {
+      console.error('[IdleTimeout] Stop error:', err);
+    }
   };
+
+  // Handle idle timeout restart event
+  idleTimeoutManager.onRestart = async () => {
+    try {
+      await browserSession.start();
+      await streamerPeer.start({browserSession});
+    } catch (err) {
+      console.error('[IdleTimeout] Restart error:', err);
+    }
+  };
+
+  // Start idle timeout manager with initial client count
+  idleTimeoutManager.start(wsManager.clients.size);
 
   // Create Hono app with all dependencies
   const { app, wsRoutes } = createApp({
     browserSession,
     streamerPeer,
     inputChannel,
-    clientIceServers,
+    clientIceServers: cfg.clientIceServers(),
     wsManager,
-    env
+    env: cfg.auth
   });
 
   // Start the server
-  const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST });
-  const base = `http://127.0.0.1:${PORT}`;
+  const server = serve({ fetch: app.fetch, port: cfg.net.PORT, hostname: cfg.net.HOST });
 
   // Handle WebSocket upgrades
   server.on('upgrade', (request, socket, head) => {
@@ -94,38 +128,16 @@ async function main() {
     // No WebSocket route matched
     socket.destroy();
   });
+ 
+  console.log(`magpie listening on ${cfg.net.HOST}:${cfg.net.PORT}`);
 
-  await streamerPeer.start({ streamerUrl: buildStreamerUrl(base, cfg), iceServers: serverIceServers });
-
-  // Pump screencast frames into the streamer page.
-  await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
-
-  // URL-bar sync: every main-frame navigation in the remote page (Go,
-  // back/forward/reload, or a passive link-click) broadcasts the new nav state
-  // to all clients. See the BrowserSession framenavigated listener.
-  browserSession.onUrlChange = (nav) => wsManager.broadcast({ t: "nav", ...nav });
-
-  // Tab state broadcast: fire whenever pages are opened/closed/switched or
-  // titles change. Clients render the tab bar from this.
-  browserSession.onTabsChange = (state) => wsManager.broadcast({ t: "tabs", ...state });
-
-  // Handle clipboard changes from remote browser
-  browserSession.onClipboardChange = (data) => {
-    wsManager.broadcast({ t: "clipboard", text: data.text });
-  };
-
-  browserSession.onCrash = async () => {
-    try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
-    wsManager.broadcast({ t: "reload" });
-    try { await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data)); } catch (err) { console.error("onCrash: screencast restart failed", err); }
-  };
-
-  console.log(`magpie listening on ${base}`);
+  // start browser and streamPeer
+  await browserSession.start();
+  await streamerPeer.start({ browserSession });
 
   const shutdown = async () => {
     server.close();
-    try { await streamerPeer.stop(); } catch {}
-    try { await browserSession.stop(); } catch {}
+    await idleTimeoutManager.stop();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

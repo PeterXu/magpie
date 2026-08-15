@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, defaultBitrate, resolveMaxBitrate, loadAuthConfig } from "../src/config.js";
+import { loadConfig, defaultBitrate, resolveMaxBitrate } from "../src/config.js";
 
 test("loadConfig: defaults when env empty", () => {
   const c = loadConfig({});
@@ -99,23 +99,23 @@ test("loadConfig: MAGPIE_DEGRADATION enum + flipped default", () => {
 });
 
 // Auth config tests
-test("loadAuthConfig returns default values when env is empty", () => {
-  const config = loadAuthConfig({});
-  assert.equal(config.adminUser, "admin");
-  assert.equal(config.adminPassword, "");
-  assert.equal(config.jwtSecret, "");
-  assert.equal(config.jwtExpiresIn, 86400);
+test("loadConfig.auth returns default values when env is empty", () => {
+  const config = loadConfig({});
+  assert.equal(config.auth.ADMIN_USER, "admin");
+  assert.equal(config.auth.ADMIN_PASSWORD, "");
+  assert.equal(config.auth.JWT_SECRET, "");
+  assert.equal(config.auth.JWT_EXPIRES_IN, 86400);
 });
 
-test("loadAuthConfig reads values from env", () => {
-  const config = loadAuthConfig({
+test("loadConfig.auth reads values from env", () => {
+  const config = loadConfig({
     MAGPIE_ADMIN_USER: "testuser",
     MAGPIE_ADMIN_PASSWORD: "testpass",
     MAGPIE_JWT_SECRET: "testsecret",
     MAGPIE_JWT_EXPIRES_IN: "3600"
   });
-  assert.equal(config.adminUser, "testuser");
-  assert.equal(config.adminPassword, "testpass");
-  assert.equal(config.jwtSecret, "testsecret");
-  assert.equal(config.jwtExpiresIn, 3600);
+  assert.equal(config.auth.ADMIN_USER, "testuser");
+  assert.equal(config.auth.ADMIN_PASSWORD, "testpass");
+  assert.equal(config.auth.JWT_SECRET, "testsecret");
+  assert.equal(config.auth.JWT_EXPIRES_IN, 3600);
 });

@@ -1,3 +1,5 @@
+import { EventEmitter } from 'events';
+
 /**
  * WebSocketManager - Manages all WebSocket connections and provides broadcast functionality
  *
@@ -5,8 +7,9 @@
  * messages to all connected clients. Used for crash notifications and
  * other global events.
  */
-export class WebSocketManager {
+export class WebSocketManager extends EventEmitter {
   constructor() {
+    super();
     this.clients = new Set(); // Store all connected WebSocket instances
   }
 
@@ -16,8 +19,15 @@ export class WebSocketManager {
    */
   add(ws) {
     this.clients.add(ws);
+    // Emit connection change event
+    this.emit('connection-change', this.clients.size);
+
     // Auto-remove on close
-    ws.on('close', () => this.clients.delete(ws));
+    ws.on('close', () => {
+      this.clients.delete(ws);
+      // Emit connection change event
+      this.emit('connection-change', this.clients.size);
+    });
   }
 
   /**

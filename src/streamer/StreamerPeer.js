@@ -1,16 +1,20 @@
 import logger from '../utils/logger.js';
 
 export class StreamerPeer {
-  constructor({ browser }) {
-    this._browser = browser;
+  // streamerUrl may be deferred to start() (tests bind an ephemeral port).
+  constructor({ streamerUrl = null, iceServers = [] } = {}) {
+    this._streamerUrl = streamerUrl;
+    this._iceServers = iceServers;
     this._context = null;
     this._page = null;
     this._frameSocket = null;
   }
 
-  async start({ streamerUrl, iceServers = [] }) {
-    this._iceServers = iceServers;
-    this._context = await this._browser.newContext();
+  async start({ browserSession, streamerUrl }) {
+    this._streamerUrl = streamerUrl ?? this._streamerUrl;
+    // Dynamically get browser from browserSession (handles restart)
+    const browser = browserSession.getBrowser();
+    this._context = await browser.newContext();
     this._page = await this._context.newPage();
 
     // Surface page-side failures: parse errors, uncaught exceptions, failed
@@ -28,7 +32,7 @@ export class StreamerPeer {
     this._page.on("requestfailed", (req) =>
       console.error(`[Streamer] requestfailed: ${req.url()} ${req.failure()?.errorText || ""}`));
 
-    await this._page.goto(streamerUrl, { waitUntil: "domcontentloaded" });
+    await this._page.goto(this._streamerUrl, { waitUntil: "domcontentloaded" });
     await this._page.waitForFunction(() => window.__ready === true, undefined, { timeout: 5000 });
     // Read the video codecs this browser can ENCODE, so the client (offerer) can
     // pick a codec both sides support. Excludes non-codec entries (rtx/red/fec).
@@ -43,6 +47,8 @@ export class StreamerPeer {
       }
       return [...names];
     });
+
+    await browserSession.startScreencast((frame) => this.pushFrame(frame.data));
   }
 
   getSenderCodecs() {
@@ -69,6 +75,13 @@ export class StreamerPeer {
   async pushFrame(jpegBuffer) {
     if (this._frameSocket && this._frameSocket.readyState === this._frameSocket.OPEN) {
       this._frameSocket.send(jpegBuffer);
+    } else {
+      // Debug: log when frames are dropped due to missing socket
+      if (!this._frameSocket) {
+        console.error('[StreamerPeer] pushFrame: _frameSocket is null - WebSocket not connected yet?');
+      } else if (this._frameSocket.readyState !== this._frameSocket.OPEN) {
+        console.error('[StreamerPeer] pushFrame: WebSocket not open, state=', this._frameSocket.readyState);
+      }
     }
   }
 
