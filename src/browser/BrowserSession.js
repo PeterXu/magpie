@@ -238,6 +238,10 @@ export class BrowserSession {
     return { width: this._width, height: this._height };
   }
 
+  getBrowser() {
+    return this._browser;
+  }
+
   getUrl() {
     const entry = this._pages.get(this._activePageId);
     return entry ? entry.page.url() : this._url;

@@ -92,6 +92,7 @@ test("server: signaling handles offer/navigate/back/forward/refresh; hello carri
   ws.on("message", (d) => received.push(JSON.parse(d.toString())));
   await new Promise((r) => ws.on("open", r));
   try {
+    ws.send(JSON.stringify({ t: "hi" }));
     ws.send(JSON.stringify({ t: "offer", sdp: "v=0" }));
     ws.send(JSON.stringify({ t: "navigate", url: "https://example.com" }));
     ws.send(JSON.stringify({ t: "back" }));

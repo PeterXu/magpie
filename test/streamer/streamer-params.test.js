@@ -8,11 +8,14 @@ import { chromium } from "playwright";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STREAMER_HTML = path.join(__dirname, "..", "..", "src", "streamer", "streamer.html");
+const BUNDLE_PATH = path.join(__dirname, "..", "..", "webrtc", "dist", "magpie-webrtc.js");
 
 async function serveStreamer() {
   const html = await readFile(STREAMER_HTML, "utf8");
+  const bundle = await readFile(BUNDLE_PATH, "utf8");
   const server = http.createServer((req, res) => {
     if (req.url.startsWith("/streamer.html")) { res.writeHead(200, { "content-type": "text/html" }); return res.end(html); }
+    if (req.url.startsWith("/magpie-webrtc.js")) { res.writeHead(200, { "content-type": "application/javascript" }); return res.end(bundle); }
     res.writeHead(404); res.end();
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));

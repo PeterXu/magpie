@@ -18,7 +18,7 @@ async function boot() {
   const browserSession = new BrowserSession({ url: FIXTURE, width: 400, height: 300, browser });
   await browserSession.start();
   const streamerPeer = new StreamerPeer({ browser });
-  const inputChannel = new InputChannel({ browserSession, viewportProvider: browserSession });
+  const inputChannel = new InputChannel({ browserSession });
 
   // Create WebSocket manager
   const wsManager = new WebSocketManager();

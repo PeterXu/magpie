@@ -52,8 +52,7 @@ describe('InputChannel clipboard handling', () => {
     };
 
     const channel = new InputChannel({
-      browserSession: mockSession,
-      viewportProvider: mockSession
+      browserSession: mockSession
     });
 
     await channel.handle(Buffer.from(JSON.stringify({ t: 'paste', text: 'Hello' })));
@@ -75,8 +74,7 @@ describe('InputChannel clipboard handling', () => {
     };
 
     const channel = new InputChannel({
-      browserSession: mockSession,
-      viewportProvider: mockSession
+      browserSession: mockSession
     });
 
     await channel.handle(Buffer.from(JSON.stringify({ t: 'copy', cut: true })));

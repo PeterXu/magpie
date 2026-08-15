@@ -2,15 +2,14 @@ import { parseInputMessage } from "./keys.js";
 import { mapClientToPage } from "./coords.js";
 
 export class InputChannel {
-  constructor({ browserSession, viewportProvider }) {
+  constructor({ browserSession }) {
     this._bs = browserSession;
-    this._vp = viewportProvider;
   }
 
   async handle(raw) {
     let event;
     try { event = parseInputMessage(raw); } catch { return; }
-    const vp = this._vp.getViewport();
+    const vp = this._bs.getViewport();
 
     if (event.kind === "mouse") {
       if (!(event.displayW > 0 && event.displayH > 0)) return;

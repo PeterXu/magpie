@@ -1,5 +1,3 @@
-import { chromium } from "playwright";
-import { chromiumLaunchOptions } from "./browser/launch-options.js";
 import { BrowserSession } from "./browser/BrowserSession.js";
 import { StreamerPeer } from "./streamer/StreamerPeer.js";
 import { InputChannel } from "./utils/InputChannel.js";
@@ -48,13 +46,11 @@ export function buildStreamerUrl(base, c) {
 }
 
 async function main() {
-  const browser = await chromium.launch(chromiumLaunchOptions());
-
-  const browserSession = new BrowserSession({ url: DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, browser, screencast: cfg.screencast });
+  const browserSession = new BrowserSession({ url: DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, screencast: cfg.screencast });
   await browserSession.start();
 
-  const streamerPeer = new StreamerPeer({ browser });
-  const inputChannel = new InputChannel({ browserSession, viewportProvider: browserSession });
+  const streamerPeer = new StreamerPeer({ browser: browserSession.getBrowser() });
+  const inputChannel = new InputChannel({ browserSession });
 
   // Create WebSocket manager for broadcasting
   const wsManager = new WebSocketManager();
@@ -130,7 +126,6 @@ async function main() {
     server.close();
     try { await streamerPeer.stop(); } catch {}
     try { await browserSession.stop(); } catch {}
-    try { await browser.close(); } catch {}
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
