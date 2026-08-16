@@ -70,7 +70,7 @@ export class MagpieCanvasMedia extends EventEmitter {
       if (this.lastFrame) {
         this.ctx.drawImage(this.lastFrame, 0, 0);
       }
-    }, 50);
+    }, 300);
   }
 
   destroy() {

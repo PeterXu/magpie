@@ -511,11 +511,11 @@ export class BrowserSession {
     const maxLength = 100000; // 100KB
     const safeText = text.substring(0, maxLength);
 
-    console.log('[BrowserSession] insertText: inserting', safeText.length, 'chars into page', this._activePageId);
+    //console.log('[BrowserSession] insertText: inserting', safeText.length, 'chars into page', this._activePageId);
 
     try {
       await entry.cdp.send("Input.insertText", { text: safeText });
-      console.log('[BrowserSession] insertText: success');
+      //console.log('[BrowserSession] insertText: success');
     } catch (err) {
       console.error('[BrowserSession] CDP insertText failed:', err);
       // Fallback: send char by char
