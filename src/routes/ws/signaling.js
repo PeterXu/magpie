@@ -49,8 +49,6 @@ export function createSignalingRoute({ sessionHandler, wsManager }) {
         if (response) {
           switch (response.t) {
             case 'hello':
-              // delay some time to prepare browser
-              await new Promise(resolve => setTimeout(resolve, 300));
               wsManager.setPeer(response.id, ws);
               send(response);
               break;

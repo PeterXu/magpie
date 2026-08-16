@@ -62,3 +62,17 @@ test("BrowserSession: startScreencast forwards quality; passes no rate param", a
     await session.stop();
   }
 });
+
+test("BrowserSession: start({url}) overrides the session url on restart", async () => {
+  const session = new BrowserSession({ url: FIXTURE, width: 400, height: 300 });
+  await session.start();
+  try {
+    // Session navigated somewhere; an idle-timeout restart wants a fresh blank page.
+    await session.stop();
+    await session.start({ url: "about:blank" });
+    const url = session.getUrl();
+    assert.ok(url === "about:blank" || url === "", `expected blank page, got ${url}`);
+  } finally {
+    await session.stop();
+  }
+});

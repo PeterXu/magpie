@@ -248,7 +248,8 @@ export class BrowserSession {
     return entry ? entry.page.url() : this._url;
   }
 
-  async start() {
+  async start({ url } = {}) {
+    if (url !== undefined) this._url = url;
     this._crashFired = false;
     this._intentionalStop = false;
     if (this._injectedBrowser) {
@@ -328,7 +329,6 @@ export class BrowserSession {
     try { if (this._context) await this._context.close(); } catch {}
     if (this._ownsBrowser && this._browser) { try { await this._browser.close(); } catch {} }
     this._browser = this._context = this._activePageId = null;
-    this._url = 'about:blank';
   }
 
   async navigate(url) {

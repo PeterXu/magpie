@@ -90,7 +90,7 @@ async function main() {
   // Handle idle timeout restart event
   idleTimeoutManager.onRestart = async () => {
     try {
-      await browserSession.start();
+      await browserSession.start({ url: "about:blank" });  // fresh session after idle
       await streamerPeer.start({browserSession});
     } catch (err) {
       console.error('[IdleTimeout] Restart error:', err);
