@@ -135,18 +135,18 @@ export class MagpieNegotiator extends EventEmitter {
 
       switch (state) {
         case 'failed':
-          console.error('ICE connection failed');
+          console.error(this.TAG, 'ICE connection failed');
           this.connection.emit('error', { type: 'NegotiationFailed', message: 'ICE connection failed' });
           this.connection.close();
           break;
 
         case 'closed':
-          console.log('ICE connection closed');
+          console.log(this.TAG, 'ICE connection closed');
           this.connection.close();
           break;
 
         case 'disconnected':
-          console.log('ICE connection disconnected');
+          console.log(this.TAG, 'ICE connection disconnected');
           break;
 
         case 'completed':
@@ -318,7 +318,7 @@ export class MagpieNegotiator extends EventEmitter {
       });
       return pc.localDescription;
     } catch (err) {
-      console.error('Failed to create answer:', err);
+      console.error(this.TAG, 'Failed to create answer:', err);
       this.connection.emit('error', { type: 'WebRTC', error: err });
       throw err;
     }
