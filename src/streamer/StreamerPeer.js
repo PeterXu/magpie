@@ -5,17 +5,21 @@ export class StreamerPeer {
   constructor({ streamerUrl = null, iceServers = [] } = {}) {
     this._streamerUrl = streamerUrl;
     this._iceServers = iceServers;
-    this._context = null;
     this._page = null;
     this._frameSocket = null;
   }
 
+  // The streamer page IS the dedicated streamer BrowserSession's active page
+  // (plain launch, no userDataDir — never in the user profile). The session
+  // owns the browser/context/page lifecycle; this class only drives the page,
+  // so no second context is spawned alongside the session's unused initial one.
+  // The remote session's CDP screencast is bridged to pushFrame() by index.js.
   async start({ browserSession, streamerUrl }) {
     this._streamerUrl = streamerUrl ?? this._streamerUrl;
-    // Dynamically get browser from browserSession (handles restart)
-    const browser = browserSession.getBrowser();
-    this._context = await browser.newContext();
-    this._page = await this._context.newPage();
+    this._page = browserSession.getActivePage();
+    if (!this._page) {
+      throw new Error("StreamerPeer: streamer session has no active page (start it first)");
+    }
 
     // Surface page-side failures: parse errors, uncaught exceptions, failed
     // module requests (404/CORS/MIME), and browser-reported console errors.
@@ -48,7 +52,6 @@ export class StreamerPeer {
       return [...names];
     });
 
-    await browserSession.startScreencast((frame) => this.pushFrame(frame.data));
   }
 
   getSenderCodecs() {
@@ -89,9 +92,10 @@ export class StreamerPeer {
     return this._page.evaluate((opts) => window.relayOffer(opts.message, opts.iceServers), { message, iceServers: this._iceServers ?? [] });
   }
 
+  // Page/context/browser lifecycle belongs to the streamer BrowserSession;
+  // stop() only detaches so the session's stop() can tear everything down.
   async stop() {
+    this._page = null;
     this._frameSocket = null;
-    try { if (this._context) await this._context.close(); } catch {}
-    this._context = this._page = null;
   }
 }

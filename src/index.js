@@ -16,9 +16,13 @@ loadEnvFile();
 // Load config
 const cfg = loadConfig();
 
+// This is Remote browser session: the browser the user sees and controls. Persistent
+// (login state on disk) when MAGPIE_USER_DATA_DIR is set, plain launch
+// otherwise. In persistent mode browser() is null — nothing may derive
+// contexts from it, which is why the streamer has its own session below.
 function createBrowserSession({ wsManager, streamerPeer }) {
-  const browserSession = new BrowserSession({ url: cfg.DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, screencast: cfg.screencast });
-  
+  const browserSession = new BrowserSession({ url: cfg.DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, userDataDir: cfg.USER_DATA_DIR, screencast: cfg.screencast });
+
   // URL-bar sync: every main-frame navigation in the remote page (Go,
   // back/forward/reload, or a passive link-click) broadcasts the new nav state
   // to all clients. See the BrowserSession framenavigated listener.
@@ -33,15 +37,51 @@ function createBrowserSession({ wsManager, streamerPeer }) {
     wsManager.broadcast({ t: "clipboard", text: data.text });
   };
 
+  // Crash recovery restarts only the remote browser. The streamer page lives
+  // in its own Chromium (separate crash domain) and its client-facing
+  // RTCPeerConnection survives; re-wiring the screencast bridge resumes video.
   browserSession.onCrash = async () => {
-    try { await streamerPeer.stop(); } catch (err) { console.error("onCrash: streamerPeer stop failed", err); }
     await new Promise(resolve => setTimeout(resolve, 1000));
     try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
     wsManager.broadcast({ t: "reload" });
-    try { await streamerPeer.start({ browserSession }); } catch (err) { console.error("onCrash: streamerPeer start failed", err); }
+    try { wireScreencast(); } catch (err) { console.error("onCrash: screencast rewire failed", err); }
   };
 
-  return browserSession;
+  // Screencast bridge: remote browser's CDP frames → streamer page canvas.
+  // Re-wired after every browserSession start (crash restart / idle restart);
+  // startScreencast() replaces the previous callback.
+  const wireScreencast = () =>
+    browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
+
+  return { browserSession, wireScreencast };
+}
+
+// Streamer session: hosts the streamer page (canvas → WebRTC). Always a plain
+// launch — never in the user profile — so StreamerPeer can borrow a context
+// from its browser and profile data stays clean of streamer traffic.
+// Viewport can be tiny: the canvas resolution comes from the streamer URL's
+// w/h params (canvas.width/height + captureStream read the backing store,
+// never the layout), so a small window only saves compositor memory.
+// If it crashes, the streamer page (and every client's RTCPeerConnection
+// endpoint) dies — onCrash restarts it and clients re-offer via reload.
+function createStreamerSession({ wsManager, streamerPeer }) {
+  const streamerSession = new BrowserSession({ url: "about:blank", width: 320, height: 240 });
+
+  streamerSession.onCrash = async () => {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      await streamerSession.restart();
+      await streamerPeer.start({ browserSession: streamerSession });
+    } catch (err) {
+      console.error("[StreamerCrash] recovery failed", err);
+      return;
+    }
+    // The old RTCPeerConnections died with the streamer page; a client page
+    // reload re-runs the whole offer/answer handshake against the new one.
+    wsManager.broadcast({ t: "reload" });
+  };
+
+  return streamerSession;
 }
 
 async function main() {
@@ -61,8 +101,11 @@ async function main() {
     iceServers: cfg.serverIceServers()
   });
 
-  // Create BrowserSession
-  const browserSession = createBrowserSession({ wsManager, streamerPeer });
+  // Two browser sessions with separate lifecycles and crash domains:
+  // - browserSession: the user's reload-broadcasting browser (persistent profile when configured)
+  // - streamerSession: hosts the streamer page (plain launch, no profile)
+  const { browserSession, wireScreencast } = createBrowserSession({ wsManager, streamerPeer });
+  const streamerSession = createStreamerSession({ wsManager, streamerPeer });
 
   // Create InputChannel for processing BrowserSession events
   const inputChannel = new InputChannel({ browserSession });
@@ -82,6 +125,7 @@ async function main() {
     try {
       await streamerPeer.stop();
       await browserSession.stop();
+      await streamerSession.stop();
     } catch (err) {
       console.error('[IdleTimeout] Stop error:', err);
     }
@@ -90,8 +134,12 @@ async function main() {
   // Handle idle timeout restart event
   idleTimeoutManager.onRestart = async () => {
     try {
-      await browserSession.start({ url: "about:blank" });  // fresh session after idle
-      await streamerPeer.start({browserSession});
+      // about:blank keeps the user profile clean; in persistent mode login
+      // state is on disk anyway — restart restores it automatically.
+      await browserSession.start({ url: "about:blank" });
+      await streamerSession.start();
+      await streamerPeer.start({ browserSession: streamerSession });
+      wireScreencast();
     } catch (err) {
       console.error('[IdleTimeout] Restart error:', err);
     }
@@ -138,13 +186,24 @@ async function main() {
  
   console.log(`[magpie] listening on ${cfg.net.HOST}:${cfg.net.PORT}`);
 
-  // start browser and streamPeer
+  // start browsers and streamPeer (remote first — streamer borrows nothing
+  // from it, but the screencast bridge needs the remote pages up)
   await browserSession.start();
-  await streamerPeer.start({ browserSession });
+  await streamerSession.start();
+  // StreamerPeer drives the streamer session's own initial page — no extra
+  // context/page is created alongside it.
+  await streamerPeer.start({ browserSession: streamerSession });
+  wireScreencast();
 
   const shutdown = async () => {
     server.close();
     await idleTimeoutManager.stop();
+    // Graceful close so the persistent profile flushes to disk and Chromium
+    // doesn't leave a SingletonLock in the userDataDir. Streamer first (it
+    // borrows a context from streamerSession's browser).
+    try { await streamerPeer.stop(); } catch (err) { console.error("[magpie] streamer stop failed", err); }
+    try { await streamerSession.stop(); } catch (err) { console.error("[magpie] streamer browser stop failed", err); }
+    try { await browserSession.stop(); } catch (err) { console.error("[magpie] remote browser stop failed", err); }
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

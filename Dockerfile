@@ -11,6 +11,9 @@ RUN npm ci \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/*
 COPY --chown=node:node src ./src
+# Pre-create the browser profile root so named-volume/binary mounts (which
+# Docker otherwise creates root-owned) are writable by the non-root `node` user.
+RUN mkdir -p /app/browser-data && chown node:node /app/browser-data
 ENV NODE_ENV=production \
     NODE_NO_WARNINGS=1 \
     MAGPIE_NO_SANDBOX=1

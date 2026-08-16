@@ -46,15 +46,13 @@ export class IdleTimeoutManager {
   }
 
   /**
-   * 停止空闲超时管理
+   * 停止空闲超时管理（仅清理定时器；不触发 onStop —— 组件 teardown
+   * 由调用方 shutdown 显式负责）
    */
   async stop() {
     if (this._checkInterval) {
       clearInterval(this._checkInterval);
       this._checkInterval = null;
-    }
-    if (this.onStop) {
-      await this.onStop();
     }
   }
 

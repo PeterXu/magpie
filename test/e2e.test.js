@@ -20,10 +20,15 @@ async function boot() {
   // Leaked handles (browser, http server) keep the event loop alive and hang
   // node --test.
   let browserSession = null;
+  let streamerSession = null;
   let server = null;
   try {
     browserSession = new BrowserSession({ url: FIXTURE, width: 400, height: 300, browser });
     await browserSession.start();
+    // Dedicated streamer session (same shape as index.js's createStreamerSession):
+    // the streamer page is its active page, separate from the remote session.
+    streamerSession = new BrowserSession({ url: "about:blank", width: 320, height: 240, browser });
+    await streamerSession.start();
     const streamerPeer = new StreamerPeer();  // URL known after listen()
     const inputChannel = new InputChannel({ browserSession });
 
@@ -83,10 +88,14 @@ async function boot() {
     }
 
     const base = `http://127.0.0.1:${address.port}`;
-    await streamerPeer.start({ browserSession, streamerUrl: `${base}/streamer.html?w=400&h=300` });
-    return { browser, browserSession, streamerPeer, server, base };
+    await streamerPeer.start({ browserSession: streamerSession, streamerUrl: `${base}/streamer.html?w=400&h=300` });
+    // Screencast bridge (index.js responsibility in production): remote CDP
+    // frames → streamer page canvas.
+    await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
+    return { browser, browserSession, streamerSession, streamerPeer, server, base };
   } catch (err) {
     try { if (server) server.close(); } catch {}
+    try { if (streamerSession) await streamerSession.stop(); } catch {}
     try { if (browserSession) await browserSession.stop(); } catch {}
     try { await browser.close(); } catch {}
     throw err;
@@ -149,6 +158,7 @@ test("e2e: client sees video and a click reaches the target page", async () => {
     await client.close();
     ctx.server.close();
     await ctx.streamerPeer.stop();
+    await ctx.streamerSession.stop();
     await ctx.browserSession.stop();
     await ctx.browser.close();
   }

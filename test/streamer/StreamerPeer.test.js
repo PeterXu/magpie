@@ -54,10 +54,11 @@ test("StreamerPeer: relays offer and streams pushed frames to a client peer", as
   const port = httpServer.address().port;
 
   try {
-    // Mock browserSession that returns the browser
+    // Stand in for the dedicated streamer BrowserSession: its active page is
+    // the streamer page host (index.js keeps a plain-launch session for it).
+    const streamerHost = await browser.newPage();
     const mockBrowserSession = {
-      getBrowser: () => browser,
-      startScreencast: async () => {}
+      getActivePage: () => streamerHost,
     };
     const sp = new StreamerPeer();
     internalWss.on("connection", (ws) => sp.setFrameSocket(ws));
@@ -82,6 +83,7 @@ test("StreamerPeer: relays offer and streams pushed frames to a client peer", as
 
     await clientPage.close();
     await sp.stop();
+    await streamerHost.close();
   } finally {
     internalWss.close();
     httpServer.close();

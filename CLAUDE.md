@@ -18,7 +18,7 @@ npm test                          # node --test
 ```
 
 **Environment**: `src/env.js` auto-loads `.env`. Key variables:
-- Server: `PORT`, `HOST`, `MAGPIE_URL`
+- Server: `PORT`, `HOST`, `MAGPIE_URL`, `MAGPIE_USER_DATA_DIR` (persistent profile dir; empty = in-memory)
 - Video: `MAGPIE_WIDTH`, `MAGPIE_HEIGHT`, `MAGPIE_FPS`, `MAGPIE_MAX_BITRATE`, `MAGPIE_DEGRADATION`
 - Auth: `MAGPIE_ADMIN_USER`, `MAGPIE_ADMIN_PASSWORD`, `MAGPIE_JWT_SECRET`
 - TURN: `MAGPIE_HOST_IP`, `MAGPIE_TURN_HOST`, `MAGPIE_TURN_USER`, `MAGPIE_TURN_PASS`

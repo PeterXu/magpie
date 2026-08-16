@@ -8,6 +8,8 @@ services:
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     shm_size: 2gb            # Chromium stability (default 64MB /dev/shm can crash)
+    volumes:
+      - magpie-browser-data:/app/browser-data
     # Explicit environment variables (no env_file for clarity and security).
     # Only variables listed here enter the container. User can override via host .env.
     environment:
@@ -20,6 +22,7 @@ services:
       - PORT=${PORT:-8080}
       # 用户可配置项（从宿主机 .env 读取，或使用默认值）
       - MAGPIE_URL=${MAGPIE_URL:-about:blank}
+      - MAGPIE_USER_DATA_DIR=${MAGPIE_USER_DATA_DIR:-/app/browser-data/default}
       - MAGPIE_WIDTH=${MAGPIE_WIDTH:-1280}
       - MAGPIE_HEIGHT=${MAGPIE_HEIGHT:-800}
       - MAGPIE_QUALITY=${MAGPIE_QUALITY:-80}
@@ -72,3 +75,6 @@ services:
 networks:
   magpie-network:
     driver: bridge
+
+volumes:
+  magpie-browser-data:

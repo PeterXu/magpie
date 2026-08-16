@@ -3,12 +3,15 @@ import { chromiumLaunchOptions } from "./launch-options.js";
 import { BLANK_HTML } from "./blank-page.js";
 
 export class BrowserSession {
-  constructor({ url = "about:blank", width = 1280, height = 800, browser, screencast = { quality: 80 } } = {}) {
+  // userDataDir set (and no injected browser) -> persistent mode: Chromium
+  // profile on disk via launchPersistentContext, login state survives restarts.
+  constructor({ url = "about:blank", width = 1280, height = 800, browser, userDataDir = null, screencast = { quality: 80 } } = {}) {
     this._url = url;
     this._width = width;
     this._height = height;
     this._screencast = screencast;
     this._injectedBrowser = browser ?? null;
+    this._userDataDir = userDataDir;
     this._browser = null;
     this._ownsBrowser = false;
     this._context = null;
@@ -243,6 +246,11 @@ export class BrowserSession {
     return this._browser;
   }
 
+  // Public: the active page (e.g. the streamer page host). Null when stopped.
+  getActivePage() {
+    return this._page;
+  }
+
   getUrl() {
     const entry = this._pages.get(this._activePageId);
     return entry ? entry.page.url() : this._url;
@@ -252,14 +260,27 @@ export class BrowserSession {
     if (url !== undefined) this._url = url;
     this._crashFired = false;
     this._intentionalStop = false;
+    let initialPages = null;
     if (this._injectedBrowser) {
       this._browser = this._injectedBrowser;
+      this._ownsBrowser = false;
+    } else if (this._userDataDir) {
+      // Persistent mode: the context IS the browser process. browser() is null
+      // here — no new contexts can be derived (why StreamerPeer self-launches).
+      // Same tick as launch: snapshot before any page event can interleave.
+      this._context = await chromium.launchPersistentContext(this._userDataDir, {
+        ...chromiumLaunchOptions(),
+        viewport: { width: this._width, height: this._height },
+      });
+      initialPages = this._context.pages();
       this._ownsBrowser = false;
     } else {
       this._browser = await chromium.launch(chromiumLaunchOptions());
       this._ownsBrowser = true;
     }
-    this._context = await this._browser.newContext({ viewport: { width: this._width, height: this._height } });
+    if (!this._context) {
+      this._context = await this._browser.newContext({ viewport: { width: this._width, height: this._height } });
+    }
 
     // Capture all new pages (including target="_blank") via context event.
     // Returns the pageId so we can await registration for the initial page.
@@ -287,14 +308,38 @@ export class BrowserSession {
       });
     });
 
-    // Create the initial page. The event handler above will register it.
-    await this._context.newPage();
-    await initialIdPromise;  // Wait for registration to complete
-    // Use BLANK_HTML for about:blank, otherwise navigate to URL
-    if (this._url === "about:blank") {
-      await this._page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
+    // Persistent mode: the context may come up with restored pages already
+    // present — they were created before the listener existed, so they never
+    // fire context.on("page"). Register them directly (first becomes active).
+    // Fresh mode: create the initial page, which the event handler registers.
+    if (initialPages && initialPages.length > 0) {
+      for (const page of initialPages) {
+        const id = await this._registerPage(page);
+        if (resolveInitialId) {
+          this._activePageId = id;
+          resolveInitialId(id);
+          resolveInitialId = null;
+        }
+      }
+      // Restored pages keep their URLs — do NOT navigate them. That would wipe
+      // the restored session's tabs. Navigating away is a user action.
     } else {
-      await this._page.goto(this._url, { waitUntil: "domcontentloaded" });
+      await this._context.newPage();
+      await initialIdPromise;  // Wait for registration to complete
+    }
+    // Navigate the initial page to the configured URL — unless it's a restored
+    // page that already has a real URL (navigating would wipe the session).
+    // A persistent context ALWAYS starts with one page; on a fresh profile it
+    // is about:blank (navigate), after a restore it is the session's URL (keep).
+    // Chromium's default launch doesn't session-restore, but a profile can
+    // still come up on a non-blank URL (crash-restore, startup prefs).
+    const keepRestored = !!(initialPages && this._page && this._page.url() !== "about:blank");
+    if (!keepRestored) {
+      if (this._url === "about:blank") {
+        await this._page.setContent(BLANK_HTML, { waitUntil: "domcontentloaded" });
+      } else {
+        await this._page.goto(this._url, { waitUntil: "domcontentloaded" });
+      }
     }
 
     // Crash handling for browser disconnect (page crash handled in _registerPage).
@@ -304,7 +349,14 @@ export class BrowserSession {
       if (this._intentionalStop) return;
       this._handleCrash();
     };
-    this._browser.on("disconnected", this._onBrowserDisconnect);
+    if (this._browser) {
+      this._browser.on("disconnected", this._onBrowserDisconnect);
+    } else {
+      // Persistent mode has no browser object (browser() is null); context
+      // close is the equivalent signal (fires on crash AND intentional close,
+      // same _intentionalStop guard applies).
+      this._context.on("close", this._onBrowserDisconnect);
+    }
   }
 
   _handleCrash() {

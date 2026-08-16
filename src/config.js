@@ -107,6 +107,8 @@ export function loadConfig(env = process.env) {
     },
     DEFAULT_URL: env.MAGPIE_URL ?? "about:blank",
     IDLE_TIMEOUT_MINUTES: Number(env.MAGPIE_IDLE_TIMEOUT ?? 30),
+    // Empty string disables persistent mode (fresh in-memory profile per start).
+    USER_DATA_DIR: env.MAGPIE_USER_DATA_DIR || null,
   };
 
   const netCfg = {

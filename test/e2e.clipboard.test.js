@@ -18,6 +18,10 @@ async function boot() {
   const browser = await chromium.launch({ headless: true });
   const browserSession = new BrowserSession({ url: FIXTURE, width: 400, height: 300, browser });
   await browserSession.start();
+  // Dedicated streamer session (same shape as index.js's createStreamerSession):
+  // the streamer page is its active page, separate from the remote session.
+  const streamerSession = new BrowserSession({ url: "about:blank", width: 320, height: 240, browser });
+  await streamerSession.start();
   const streamerPeer = new StreamerPeer();  // URL known after listen()
   const inputChannel = new InputChannel({ browserSession });
 
@@ -70,9 +74,11 @@ async function boot() {
   });
 
   const base = `http://127.0.0.1:${server.address().port}`;
-  await streamerPeer.start({ browserSession, streamerUrl: `${base}/streamer.html?w=400&h=300` });
+  await streamerPeer.start({ browserSession: streamerSession, streamerUrl: `${base}/streamer.html?w=400&h=300` });
+  // Screencast bridge (index.js responsibility in production): remote CDP
+  // frames → streamer page canvas.
   await browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
-  return { browser, browserSession, streamerPeer, inputChannel, server, base };
+  return { browser, browserSession, streamerSession, streamerPeer, inputChannel, server, base };
 }
 
 /**
@@ -143,6 +149,7 @@ test("e2e clipboard: connection and status indicator", async () => {
     await client.close();
     ctx.server.close();
     await ctx.streamerPeer.stop();
+    await ctx.streamerSession.stop();
     await ctx.browserSession.stop();
     await ctx.browser.close();
   }
@@ -215,6 +222,7 @@ test("e2e clipboard: paste message handled by server", async () => {
     await client.close();
     ctx.server.close();
     await ctx.streamerPeer.stop();
+    await ctx.streamerSession.stop();
     await ctx.browserSession.stop();
     await ctx.browser.close();
   }
@@ -255,6 +263,7 @@ test("e2e clipboard: large text is truncated", async () => {
   } finally {
     ctx.server.close();
     await ctx.streamerPeer.stop();
+    await ctx.streamerSession.stop();
     await ctx.browserSession.stop();
     await ctx.browser.close();
   }
@@ -299,6 +308,7 @@ test("e2e clipboard: copy message triggers clipboard callback", async () => {
   } finally {
     ctx.server.close();
     await ctx.streamerPeer.stop();
+    await ctx.streamerSession.stop();
     await ctx.browserSession.stop();
     await ctx.browser.close();
   }
@@ -367,6 +377,7 @@ test("e2e clipboard: disconnect and reconnect", async () => {
     await client.close();
     ctx.server.close();
     await ctx.streamerPeer.stop();
+    await ctx.streamerSession.stop();
     await ctx.browserSession.stop();
     await ctx.browser.close();
   }
