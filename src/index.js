@@ -7,6 +7,7 @@ import { loadConfig } from "./config.js";
 import { loadEnvFile } from "./env.js";
 import { IdleTimeoutManager } from "./utils/IdleTimeoutManager.js";
 import { fileURLToPath } from "node:url";
+import { SessionHandler } from './handlers/signaling/SessionHandler.js';
 
 // Populate process.env from .env (cwd) before any env is read. Real/shell env
 // wins over the file. Dependency-free — see src/env.js.
@@ -34,7 +35,7 @@ function createBrowserSession({ wsManager, streamerPeer }) {
 
   browserSession.onCrash = async () => {
     try { await streamerPeer.stop(); } catch (err) { console.error("onCrash: streamerPeer stop failed", err); }
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     try { await browserSession.restart(); } catch (err) { console.error("onCrash: restart failed", err); }
     wsManager.broadcast({ t: "reload" });
     try { await streamerPeer.start({ browserSession }); } catch (err) { console.error("onCrash: streamerPeer start failed", err); }
@@ -48,8 +49,8 @@ async function main() {
   // client-side peer reaches it via the host IP. Both empty when HOST_IP unset
   // (native run -> pure host candidates).
   // 验证ICE servers配置
-  console.log('[ICE Config] HOST_IP:', cfg.net.HOST_IP || '(not set)');
-  console.log('[ICE Config] clientIceServers:', JSON.stringify(cfg.clientIceServers()));
+  console.log('[magpie] ICE Config, HOST_IP:', cfg.net.HOST_IP || '(not set)');
+  console.log('[magpie] ICE Config, clientIceServers:', JSON.stringify(cfg.clientIceServers()));
 
   // Create WebSocket manager for broadcasting
   const wsManager = new WebSocketManager();
@@ -99,12 +100,18 @@ async function main() {
   // Start idle timeout manager with initial client count
   idleTimeoutManager.start(wsManager.clients.size);
 
-  // Create Hono app with all dependencies
-  const { app, wsRoutes } = createApp({
+  // Create signal session handler
+  const sessionHandler = new SessionHandler({
     browserSession,
     streamerPeer,
     inputChannel,
-    clientIceServers: cfg.clientIceServers(),
+    clientIceServers: cfg.clientIceServers()
+  });
+
+  // Create Hono app with all dependencies
+  const { app, wsRoutes } = createApp({
+    streamerPeer,
+    sessionHandler,
     wsManager,
     env: cfg.auth
   });
@@ -129,7 +136,7 @@ async function main() {
     socket.destroy();
   });
  
-  console.log(`magpie listening on ${cfg.net.HOST}:${cfg.net.PORT}`);
+  console.log(`[magpie] listening on ${cfg.net.HOST}:${cfg.net.PORT}`);
 
   // start browser and streamPeer
   await browserSession.start();

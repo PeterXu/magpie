@@ -9,20 +9,15 @@
  */
 import { Hono } from 'hono';
 import { WebSocketServer } from 'ws';
-import { SessionHandler } from '../../handlers/signaling/SessionHandler.js';
 
 /**
  * Create signaling WebSocket route
  * @param {Object} deps - Dependencies
- * @param {BrowserSession} deps.browserSession - Browser session instance
- * @param {StreamerPeer} deps.streamerPeer - Streamer peer instance
- * @param {InputChannel} deps.inputChannel - Input channel instance
- * @param {Array} deps.clientIceServers - ICE servers for WebRTC
+ * @param {sessionHandler} deps.sessionHandler - Signal session handler
  * @param {WebSocketManager} deps.wsManager - WebSocket manager for broadcasting
  * @returns {Object} Object with wsServer and setup function
  */
-export function createSignalingRoute({ browserSession, streamerPeer, inputChannel, clientIceServers, wsManager }) {
-  const handler = new SessionHandler({ browserSession, streamerPeer, inputChannel, clientIceServers });
+export function createSignalingRoute({ sessionHandler, wsManager }) {
   const wsServer = new WebSocketServer({ noServer: true });
 
   wsServer.on('connection', (ws) => {
@@ -50,10 +45,12 @@ export function createSignalingRoute({ browserSession, streamerPeer, inputChanne
       }
 
       try {
-        const response = await handler.handle(msg);
+        const response = await sessionHandler.handle(msg);
         if (response) {
           switch (response.t) {
             case 'hello':
+              // delay some time to prepare browser
+              await new Promise(resolve => setTimeout(resolve, 300));
               wsManager.setPeer(response.id, ws);
               send(response);
               break;

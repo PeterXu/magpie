@@ -328,6 +328,7 @@ export class BrowserSession {
     try { if (this._context) await this._context.close(); } catch {}
     if (this._ownsBrowser && this._browser) { try { await this._browser.close(); } catch {} }
     this._browser = this._context = this._activePageId = null;
+    this._url = 'about:blank';
   }
 
   async navigate(url) {

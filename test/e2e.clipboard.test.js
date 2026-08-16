@@ -6,6 +6,7 @@ import { chromium } from "playwright";
 import { BrowserSession } from "../src/browser/BrowserSession.js";
 import { StreamerPeer } from "../src/streamer/StreamerPeer.js";
 import { InputChannel } from "../src/utils/InputChannel.js";
+import { SessionHandler } from '../src/handlers/signaling/SessionHandler.js';
 import { serve } from "@hono/node-server";
 import { createApp } from "../src/app.js";
 import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
@@ -23,12 +24,18 @@ async function boot() {
   // Create WebSocket manager
   const wsManager = new WebSocketManager();
 
-  // Create Hono app with empty auth config (no auth required for e2e tests)
-  const { app, wsRoutes } = createApp({
+  // Create Session handler
+  const sessionHandler = new SessionHandler({
     browserSession,
     streamerPeer,
     inputChannel,
-    clientIceServers: [],
+    clientIceServers: []
+  });
+
+  // Create Hono app with empty auth config (no auth required for e2e tests)
+  const { app, wsRoutes } = createApp({
+    streamerPeer,
+    sessionHandler,
     wsManager,
     env: {
       ADMIN_USER: 'admin',

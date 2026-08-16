@@ -24,15 +24,13 @@ import { loginApp } from './routes/api/login.js';
 /**
  * Create and configure the Hono application with WebSocket support
  * @param {Object} deps - Dependencies
- * @param {BrowserSession} deps.browserSession - Browser session instance
  * @param {StreamerPeer} deps.streamerPeer - Streamer peer instance
- * @param {InputChannel} deps.inputChannel - Input channel instance
- * @param {Array} deps.clientIceServers - ICE servers for WebRTC
+ * @param {SessionHandler} deps.sessionHandler - Signal session handler
  * @param {WebSocketManager} deps.wsManager - WebSocket manager for broadcasting
  * @param {Object} deps.env - Environment variables for auth
  * @returns {Object} Object with app and wsRoutes for WebSocket upgrade handling
  */
-export function createApp({ browserSession, streamerPeer, inputChannel, clientIceServers, wsManager, env }) {
+export function createApp({ streamerPeer, sessionHandler, wsManager, env }) {
   const app = new Hono();
 
   // Apply middleware (before routes)
@@ -88,7 +86,7 @@ export function createApp({ browserSession, streamerPeer, inputChannel, clientIc
   app.route('/', staticApp);
 
   // Create WebSocket routes (returns WebSocket servers, not Hono apps)
-  const signalingRoute = createSignalingRoute({ browserSession, streamerPeer, inputChannel, clientIceServers, wsManager });
+  const signalingRoute = createSignalingRoute({ sessionHandler, wsManager });
   const internalRoute = createInternalRoute({ streamerPeer });
 
   return {

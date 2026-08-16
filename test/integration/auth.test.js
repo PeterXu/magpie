@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { serve } from "@hono/node-server";
 import { createApp } from "../../src/app.js";
 import { WebSocketManager } from "../../src/websocket/WebSocketManager.js";
+import { SessionHandler } from '../../src/handlers/signaling/SessionHandler.js';
 import { Jwt } from "hono/utils/jwt";
 
 /**
@@ -27,6 +28,14 @@ function startTestServer(env = {}) {
 
   const wsManager = new WebSocketManager();
 
+  // Create Session handler
+  const sessionHandler = new SessionHandler({
+    browserSession,
+    streamerPeer,
+    inputChannel,
+    clientIceServers: []
+  });
+
   // Merge test env with defaults
   const testEnv = {
     ADMIN_USER: env.ADMIN_USER || "admin",
@@ -37,10 +46,8 @@ function startTestServer(env = {}) {
   };
 
   const { app, wsRoutes } = createApp({
-    browserSession,
-    inputChannel,
     streamerPeer,
-    clientIceServers: [],
+    sessionHandler,
     wsManager,
     env: testEnv
   });

@@ -4,6 +4,7 @@ import { WebSocket } from "ws";
 import { serve } from "@hono/node-server";
 import { createApp } from "../src/app.js";
 import { WebSocketManager } from "../src/websocket/WebSocketManager.js";
+import { SessionHandler } from '../src/handlers/signaling/SessionHandler.js';
 
 function startWithMocks() {
   const browserSession = {
@@ -26,12 +27,18 @@ function startWithMocks() {
   // Create WebSocket manager
   const wsManager = new WebSocketManager();
 
+  // Create Session handler
+  const sessionHandler = new SessionHandler({
+    browserSession,
+    streamerPeer,
+    inputChannel,
+    clientIceServers: []
+  });
+
   // Create Hono app with empty auth config (no auth required for tests)
   const { app, wsRoutes } = createApp({
-    browserSession,
-    inputChannel,
     streamerPeer,
-    clientIceServers: [],
+    sessionHandler,
     wsManager,
     env: {
       ADMIN_USER: 'admin',
