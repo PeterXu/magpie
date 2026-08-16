@@ -21,7 +21,7 @@ const cfg = loadConfig();
 // otherwise. In persistent mode browser() is null — nothing may derive
 // contexts from it, which is why the streamer has its own session below.
 function createBrowserSession({ wsManager, streamerPeer }) {
-  const browserSession = new BrowserSession({ url: cfg.DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, userDataDir: cfg.USER_DATA_DIR, screencast: cfg.screencast });
+  const browserSession = new BrowserSession({ url: cfg.DEFAULT_URL, width: cfg.viewport.width, height: cfg.viewport.height, userDataDir: cfg.USER_DATA_DIR, screencast: cfg.screencast, freezeBackground: cfg.FREEZE_BACKGROUND });
 
   // URL-bar sync: every main-frame navigation in the remote page (Go,
   // back/forward/reload, or a passive link-click) broadcasts the new nav state
@@ -65,7 +65,11 @@ function createBrowserSession({ wsManager, streamerPeer }) {
 // If it crashes, the streamer page (and every client's RTCPeerConnection
 // endpoint) dies — onCrash restarts it and clients re-offer via reload.
 function createStreamerSession({ wsManager, streamerPeer }) {
-  const streamerSession = new BrowserSession({ url: "about:blank", width: 320, height: 240 });
+  // freezeBackground: false — the streamer page must NEVER be frozen. It's a
+  // single-page session (no _switchTo would ever freeze it anyway), but make
+  // that explicit: a frozen streamer page would stop drawing frames and
+  // answering relayOffer, killing every client's video.
+  const streamerSession = new BrowserSession({ url: "about:blank", width: 320, height: 240, freezeBackground: false });
 
   streamerSession.onCrash = async () => {
     await new Promise(resolve => setTimeout(resolve, 1000));

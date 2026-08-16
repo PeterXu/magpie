@@ -5,13 +5,18 @@ import { BLANK_HTML } from "./blank-page.js";
 export class BrowserSession {
   // userDataDir set (and no injected browser) -> persistent mode: Chromium
   // profile on disk via launchPersistentContext, login state survives restarts.
-  constructor({ url = "about:blank", width = 1280, height = 800, browser, userDataDir = null, screencast = { quality: 80 } } = {}) {
+  // freezeBackground: disable JS execution in non-active tabs so their
+  // timers/rAF stop burning CPU — headless Chromium treats every page as
+  // visible and never throttles them by itself. Opt out via
+  // MAGPIE_FREEZE_BACKGROUND=0.
+  constructor({ url = "about:blank", width = 1280, height = 800, browser, userDataDir = null, screencast = { quality: 80 }, freezeBackground = true } = {}) {
     this._url = url;
     this._width = width;
     this._height = height;
     this._screencast = screencast;
     this._injectedBrowser = browser ?? null;
     this._userDataDir = userDataDir;
+    this._freezeBackground = freezeBackground;
     this._browser = null;
     this._ownsBrowser = false;
     this._context = null;
@@ -27,6 +32,7 @@ export class BrowserSession {
     this.onTabsChange = null;       // fires with { pages, activeId }
     this._resolveNewPageId = null;  // resolver for newPage() to wait for registration
     this._newPageInProgress = false; // lock to prevent concurrent newPage() calls
+    this._switchInProgress = null;   // queued mutex for _switchTo (freeze/unfreeze interleaving)
     this._crashFired = false;
     this._intentionalStop = false;
     this._onPageCrash = null;
@@ -117,18 +123,62 @@ export class BrowserSession {
     }
   }
 
+  // Internal helpers for background-tab freezing. "Freeze" = three layers:
+  //   1. cut network (Network.emulateNetworkConditions offline) — in-flight
+  //      loads and background fetches fail fast instead of trickling;
+  //   2. Page.stopLoading — abort whatever is still loading right now;
+  //   3. Emulation.setScriptExecutionDisabled — timers, rAF, event handlers.
+  // Like an iOS backgrounded tab; the renderer stays alive, so unfreezing on
+  // switch-back is instant. (Page.setWebLifecycleState would be the semantic
+  // fit but is a no-op in headless Chromium — pages there are pinned visible,
+  // and freeze requires hidden.) Errors ignored: a page mid-navigation can
+  // reject the commands; it just stays unfrozen until the next switch.
+  async _freezePage(entry) {
+    if (!this._freezeBackground || !entry || !entry.cdp) return;
+    try { await entry.cdp.send("Network.enable"); } catch {}
+    try { await entry.cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 }); } catch {}
+    try { await entry.cdp.send("Page.stopLoading"); } catch {}
+    try { await entry.cdp.send("Emulation.setScriptExecutionDisabled", { value: true }); } catch {}
+  }
+
+  async _unfreezePage(entry) {
+    if (!this._freezeBackground || !entry || !entry.cdp) return;
+    try { await entry.cdp.send("Emulation.setScriptExecutionDisabled", { value: false }); } catch {}
+    try { await entry.cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: 0, uploadThroughput: 0 }); } catch {}
+  }
+
   // Internal: switch the active page (screencast target) without broadcasting.
   // Caller must call _fireTabsChange if needed.
+  // Mutex: the awaits below (freeze/unfreeze/screencast) yield the event loop,
+  // so two interleaved switchPage() calls could read a stale _activePageId and
+  // leave the wrong tab unfrozen in the background. A queued lock — the last
+  // caller wins, matching the user's final intent.
   async _switchTo(pageId) {
+    // Serialize: park later calls until the in-flight switch completes.
+    while (this._switchInProgress) {
+      await this._switchInProgress;
+    }
     if (!this._pages.has(pageId) || pageId === this._activePageId) return;
+    this._switchInProgress = this._doSwitchTo(pageId);
+    try {
+      await this._switchInProgress;
+    } finally {
+      this._switchInProgress = null;
+    }
+  }
+
+  async _doSwitchTo(pageId) {
     const oldEntry = this._pages.get(this._activePageId);
     if (oldEntry && oldEntry.cdp && this._onFrame) {
       // Stop screencast on old page (ignore errors if page already closed)
       try { await oldEntry.cdp.send("Page.stopScreencast"); } catch {}
       try { oldEntry.cdp.removeAllListeners("Page.screencastFrame"); } catch {}
     }
+    // Freeze the outgoing tab (background it) before activating the new one.
+    await this._freezePage(oldEntry);
     this._activePageId = pageId;
     const entry = this._pages.get(pageId);
+    await this._unfreezePage(entry);
     if (entry && entry.cdp && this._onFrame) {
       // Start screencast on new page (ignore errors if page closing)
       try {
@@ -319,6 +369,9 @@ export class BrowserSession {
           this._activePageId = id;
           resolveInitialId(id);
           resolveInitialId = null;
+        } else {
+          // Restored background tabs stay frozen until switched to.
+          await this._freezePage(this._pages.get(id));
         }
       }
       // Restored pages keep their URLs — do NOT navigate them. That would wipe

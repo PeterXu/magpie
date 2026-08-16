@@ -109,6 +109,8 @@ export function loadConfig(env = process.env) {
     IDLE_TIMEOUT_MINUTES: Number(env.MAGPIE_IDLE_TIMEOUT ?? 30),
     // Empty string disables persistent mode (fresh in-memory profile per start).
     USER_DATA_DIR: env.MAGPIE_USER_DATA_DIR || null,
+    // "0" opts out of background-tab freezing (non-active tabs keep running).
+    FREEZE_BACKGROUND: env.MAGPIE_FREEZE_BACKGROUND !== "0",
   };
 
   const netCfg = {
