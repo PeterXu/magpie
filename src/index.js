@@ -8,6 +8,7 @@ import { loadEnvFile } from "./env.js";
 import { IdleTimeoutManager } from "./utils/IdleTimeoutManager.js";
 import { fileURLToPath } from "node:url";
 import { SessionHandler } from './handlers/signaling/SessionHandler.js';
+import { SessionRegistry } from "./session/SessionRegistry.js";
 
 // Populate process.env from .env (cwd) before any env is read. Real/shell env
 // wins over the file. Dependency-free — see src/env.js.
@@ -54,6 +55,18 @@ function createBrowserSession({ wsManager, streamerPeer }) {
     browserSession.startScreencast((frame) => streamerPeer.pushFrame(frame.data));
 
   return { browserSession, wireScreencast };
+}
+
+// SessionRegistry needs context, which is available only after browserSession.start()
+// Returns a getter function to delay instantiation
+function createSessionRegistryGetter({ browserSession }) {
+  return {
+    getRegistry: () => {
+      const context = browserSession._context;
+      if (!context) return null;
+      return new SessionRegistry({ context });
+    }
+  };
 }
 
 // Streamer session: hosts the streamer page (canvas → WebRTC). Always a plain
@@ -160,12 +173,16 @@ async function main() {
     clientIceServers: cfg.clientIceServers()
   });
 
+  // Create SessionRegistry getter
+  const sessionRegistryGetter = createSessionRegistryGetter({ browserSession });
+
   // Create Hono app with all dependencies
-  const { app, wsRoutes } = createApp({
+  const { app, wsRoutes } = await createApp({
     streamerPeer,
     sessionHandler,
     wsManager,
-    env: cfg.auth
+    env: cfg.auth,
+    getSessionRegistry: sessionRegistryGetter.getRegistry
   });
 
   // Start the server

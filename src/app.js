@@ -28,9 +28,10 @@ import { loginApp } from './routes/api/login.js';
  * @param {SessionHandler} deps.sessionHandler - Signal session handler
  * @param {WebSocketManager} deps.wsManager - WebSocket manager for broadcasting
  * @param {Object} deps.env - Environment variables for auth
- * @returns {Object} Object with app and wsRoutes for WebSocket upgrade handling
+ * @param {Function} deps.getSessionRegistry - Function to get SessionRegistry instance
+ * @returns {Promise<Object>} Object with app and wsRoutes for WebSocket upgrade handling
  */
-export function createApp({ streamerPeer, sessionHandler, wsManager, env }) {
+export async function createApp({ streamerPeer, sessionHandler, wsManager, env, getSessionRegistry }) {
   const app = new Hono();
 
   // Apply middleware (before routes)
@@ -84,6 +85,12 @@ export function createApp({ streamerPeer, sessionHandler, wsManager, env }) {
 
   // Mount protected HTTP routes
   app.route('/', staticApp);
+
+  // Sessions API route
+  if (getSessionRegistry) {
+    const { createSessionsRoute } = await import('./routes/api/sessions.js');
+    app.route('/api/sessions', createSessionsRoute({ getSessionRegistry }));
+  }
 
   // Create WebSocket routes (returns WebSocket servers, not Hono apps)
   const signalingRoute = createSignalingRoute({ sessionHandler, wsManager });

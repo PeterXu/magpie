@@ -441,6 +441,65 @@
     #tabs .new-tab:hover {
       color: #5a57c4;
     }
+
+    /* Sessions panel styles */
+    .session-item {
+      background: #fff;
+      border: 1px solid #e8e8e8;
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .session-item:hover {
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    .session-domain {
+      font-size: 15px;
+      font-weight: 500;
+      color: #2c3e50;
+      cursor: pointer;
+    }
+
+    .session-domain:hover {
+      color: #5a57c4;
+    }
+
+    .session-stats {
+      font-size: 12px;
+      color: #8892b0;
+      margin-top: 4px;
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .session-actions button {
+      background: #f5f7fa;
+      border: 1px solid #d9dade;
+      border-radius: 4px;
+      padding: 4px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #515a6e;
+    }
+
+    .session-actions button:hover {
+      background: #5a57c4;
+      color: #fff;
+      border-color: #5a57c4;
+    }
+
+    .session-actions button.danger:hover {
+      background: #f56c6c;
+      border-color: #f56c6c;
+    }
   </style>
 </head>
 <body>
@@ -459,6 +518,10 @@
       <div class="nav-item" data-panel="webrtc">
         <span class="nav-icon">🌐</span>
         <span class="nav-text">远程访问浏览器</span>
+      </div>
+      <div class="nav-item" data-panel="sessions">
+        <span class="nav-icon">🔐</span>
+        <span class="nav-text">登录状态管理</span>
       </div>
     </div>
   </div>
@@ -522,6 +585,19 @@
       <div id="tabs"></div>
       <div id="stage">
         <video id="v" autoplay playsinline muted></video>
+      </div>
+    </div>
+
+    <!-- 登录状态管理面板 -->
+    <div id="sessions-panel" class="panel">
+      <div class="page-header">
+        <div class="page-title">登录状态管理</div>
+      </div>
+      <div class="sessions-toolbar" style="padding: 12px; background: #fff; border-bottom: 1px solid #e8e8e8;">
+        <button id="refresh-sessions" style="background: #5a57c4; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 13px;">刷新</button>
+      </div>
+      <div id="sessions-list" style="flex: 1; overflow: auto; padding: 12px;">
+        <!-- 动态渲染 -->
       </div>
     </div>
   </div>
@@ -795,6 +871,114 @@
 
     // Initial state
     updateConnectionStatus(false);
+
+    // ===== Sessions Management =====
+    const sessionsListEl = document.getElementById('sessions-list');
+    const refreshSessionsBtn = document.getElementById('refresh-sessions');
+
+    async function loadSessions() {
+      try {
+        const response = await fetch('/api/sessions', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        renderSessions(data.sessions || []);
+      } catch (err) {
+        console.error('[Sessions] Failed to load:', err);
+        sessionsListEl.innerHTML = '<div style="color: #f56c6c; padding: 20px; text-align: center;">加载失败，请重试</div>';
+      }
+    }
+
+    function renderSessions(sessions) {
+      if (sessions.length === 0) {
+        sessionsListEl.innerHTML = '<div style="color: #8892b0; padding: 20px; text-align: center;">暂无保存的登录状态</div>';
+        return;
+      }
+
+      sessionsListEl.innerHTML = sessions.map(session => `
+        <div class="session-item" data-domain="${session.domain}">
+          <div>
+            <div class="session-domain" onclick="visitDomain('${session.domain}')">${session.domain}</div>
+            <div class="session-stats">Cookies: ${session.cookieCount || 0} | 检查时间: ${session.lastChecked || '-'}</div>
+          </div>
+          <div class="session-actions">
+            <button onclick="checkDomain('${session.domain}')">验证</button>
+            <button class="danger" onclick="deleteDomain('${session.domain}')">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function visitDomain(domain) {
+      // Switch to webrtc panel and navigate to domain
+      switchPanel('webrtc');
+      urlInput.value = 'https://' + domain;
+      goBtn.click();
+    }
+
+    async function checkDomain(domain) {
+      try {
+        const response = await fetch(`/api/sessions/${encodeURIComponent(domain)}/check`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+        alert(result.valid ? '登录状态有效' : '登录状态已失效');
+        loadSessions(); // Refresh list
+      } catch (err) {
+        console.error('[Sessions] Check failed:', err);
+        alert('验证失败');
+      }
+    }
+
+    async function deleteDomain(domain) {
+      if (!confirm(`确定删除 ${domain} 的登录状态吗？`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/sessions/${encodeURIComponent(domain)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        loadSessions(); // Refresh list
+      } catch (err) {
+        console.error('[Sessions] Delete failed:', err);
+        alert('删除失败');
+      }
+    }
+
+    // Bind refresh button
+    refreshSessionsBtn.addEventListener('click', loadSessions);
+
+    // Auto-load sessions when panel becomes active
+    const originalSwitchPanel = window.switchPanel;
+    window.switchPanel = function(panelName) {
+      originalSwitchPanel(panelName);
+      if (panelName === 'sessions') {
+        loadSessions();
+      }
+    };
+
+    // Expose functions globally for inline onclick handlers
+    window.visitDomain = visitDomain;
+    window.checkDomain = checkDomain;
+    window.deleteDomain = deleteDomain;
   </script>
 </body>
 </html>
