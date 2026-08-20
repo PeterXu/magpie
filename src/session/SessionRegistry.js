@@ -79,16 +79,17 @@ export class SessionRegistry {
   // rawDomains keeps the cookie domains verbatim (leading dot preserved) so
   // delete() can clear each exact value without substring-matching collateral.
   _groupCookies(cookies) {
-    const groups = new Map(); // key -> { cookieCount, origins: Map, rawDomains: Set }
+    const groups = new Map(); // key -> { cookieCount, origins: Map, rawDomains: Set, rawCookies: [] }
 
     const bucket = (key) => {
       let g = groups.get(key);
-      if (!g) { g = { cookieCount: 0, origins: new Map(), rawDomains: new Set() }; groups.set(key, g); }
+      if (!g) { g = { cookieCount: 0, origins: new Map(), rawDomains: new Set(), rawCookies: [] }; groups.set(key, g); }
       return g;
     };
     const tally = (g, cookie) => {
       g.cookieCount += 1;
       g.rawDomains.add(cookie.domain);
+      g.rawCookies.push(cookie);
       const url = this._cookieOrigin(cookie);
       g.origins.set(url, (g.origins.get(url) || 0) + 1);
     };
@@ -137,6 +138,51 @@ export class SessionRegistry {
       await context.clearCookies({ domain: raw });
     }
     logger.log(`[SessionRegistry] Deleted cookie group: ${domain} (${group.rawDomains.size} domains)`);
+  }
+
+  /**
+   * 获取指定 domain 分组的 cookie 明细（value 截断，不含完整凭证）
+   * @param {string} domain - 组键（list() 返回的 domain 字段）
+   * @returns {Promise<{domain: string, cookies: Array<{name: string, value: string, expires: number, httpOnly: boolean, secure: boolean, sameSite: string, path: string, origin: string}>} | null>}
+   *          组不存在返回 null
+   */
+  async details(domain) {
+    const cookies = await this._fetchCookies();
+    const group = this._groupCookies(cookies).get(domain);
+    if (!group) return null;
+    return {
+      domain,
+      cookies: group.rawCookies.map(cookie => ({
+        name: cookie.name,
+        value: cookie.value.length > 24 ? cookie.value.slice(0, 24) + '…' : cookie.value,
+        expires: cookie.expires > 0 ? cookie.expires : 0,
+        httpOnly: Boolean(cookie.httpOnly),
+        secure: Boolean(cookie.secure),
+        sameSite: cookie.sameSite ?? 'Unspecified',
+        path: cookie.path,
+        origin: this._cookieOrigin(cookie)
+      }))
+    };
+  }
+
+  /**
+   * 删除指定 domain 分组内某个 name 的 cookies（name+domain 精确匹配）
+   * 组不存在或无匹配时 no-op
+   * @param {string} domain - 组键
+   * @param {string} name - cookie 名
+   */
+  async deleteCookie(domain, name) {
+    const context = this._browserSession._context;
+    if (!context) return;
+    const cookies = await this._fetchCookies();
+    const group = this._groupCookies(cookies).get(domain);
+    if (!group) return;
+    const hasName = group.rawCookies.some(cookie => cookie.name === name);
+    if (!hasName) return;
+    for (const raw of group.rawDomains) {
+      await context.clearCookies({ name, domain: raw });
+    }
+    logger.log(`[SessionRegistry] Deleted cookie: ${name}@${domain}`);
   }
 
   /**

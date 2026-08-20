@@ -61,3 +61,61 @@ test('POST /api/sessions/:domain/check returns validation result', async () => {
   const data = await res.json();
   strictEqual(data.valid, true);
 });
+
+test('GET /api/sessions/:domain/cookies returns details', async () => {
+  const registry = {
+    details: async (domain) => {
+      strictEqual(domain, 'example.com');
+      return {
+        domain,
+        cookies: [
+          { name: 'tok', value: 'abc…', expires: 1756684800, httpOnly: true,
+            secure: true, sameSite: 'Lax', path: '/', origin: 'https://example.com' }
+        ]
+      };
+    }
+  };
+
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({ getSessionRegistry: () => registry }));
+
+  const res = await app.request('/api/sessions/example.com/cookies');
+  strictEqual(res.status, 200);
+
+  const data = await res.json();
+  strictEqual(data.domain, 'example.com');
+  strictEqual(data.cookies[0].name, 'tok');
+});
+
+test('GET /api/sessions/:domain/cookies returns 404 for unknown domain', async () => {
+  const registry = { details: async () => null };
+
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({ getSessionRegistry: () => registry }));
+
+  const res = await app.request('/api/sessions/nomatch.com/cookies');
+  strictEqual(res.status, 404);
+
+  const data = await res.json();
+  strictEqual(data.error, 'Domain not found');
+});
+
+test('DELETE /api/sessions/:domain/cookies/:name calls registry.deleteCookie', async () => {
+  let deleted = null;
+  const registry = {
+    deleteCookie: async (domain, name) => {
+      deleted = { domain, name };
+    }
+  };
+
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({ getSessionRegistry: () => registry }));
+
+  const res = await app.request('/api/sessions/example.com/cookies/tok', { method: 'DELETE' });
+  strictEqual(res.status, 200);
+  strictEqual(deleted.domain, 'example.com');
+  strictEqual(deleted.name, 'tok');
+
+  const data = await res.json();
+  strictEqual(data.success, true);
+});

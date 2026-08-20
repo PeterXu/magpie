@@ -43,6 +43,32 @@ export function createSessionsRoute({ getSessionRegistry }) {
     return c.json(result);
   });
 
+  // 获取指定 domain 的 cookie 明细
+  app.get('/:domain/cookies', async (c) => {
+    const sessionRegistry = getSessionRegistry();
+    if (!sessionRegistry) {
+      return c.json({ error: 'Session registry not available' }, 503);
+    }
+    const domain = c.req.param('domain');
+    const result = await sessionRegistry.details(domain);
+    if (!result) {
+      return c.json({ error: 'Domain not found' }, 404);
+    }
+    return c.json(result);
+  });
+
+  // 删除指定 domain 内某个 name 的 cookies
+  app.delete('/:domain/cookies/:name', async (c) => {
+    const sessionRegistry = getSessionRegistry();
+    if (!sessionRegistry) {
+      return c.json({ error: 'Session registry not available' }, 503);
+    }
+    const domain = c.req.param('domain');
+    const name = c.req.param('name');
+    await sessionRegistry.deleteCookie(domain, name);
+    return c.json({ success: true });
+  });
+
   // 访问该网站（在远程浏览器中打开）
   app.post('/:domain/visit', async (c) => {
     const domain = c.req.param('domain');

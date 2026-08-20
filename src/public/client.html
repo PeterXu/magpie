@@ -485,6 +485,93 @@
       text-decoration: underline;
     }
 
+    /* Modal styles */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal-content {
+      background: #fff;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 640px;
+      max-height: 80vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e8eaf0;
+    }
+    .modal-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: #2c3e50;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      color: #8892b0;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+    }
+    .modal-close:hover {
+      color: #515a6e;
+    }
+    .modal-body {
+      padding: 16px 20px;
+      overflow-y: auto;
+    }
+
+    .cookie-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: #515a6e;
+      padding: 3px 0;
+      flex-wrap: wrap;
+    }
+    .cookie-name {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      min-width: 100px;
+    }
+    .cookie-value {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      color: #8892b0;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cookie-expires { min-width: 120px; }
+    .cookie-flags { color: #8892b0; }
+    .cookie-flags:empty { display: none; }
+    .cookie-del {
+      background: none;
+      border: none;
+      color: #e74c3c;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0 4px;
+    }
+    .expired { color: #e74c3c; }
+
     .session-actions {
       display: flex;
       gap: 8px;
@@ -897,6 +984,7 @@
         }
 
         const data = await response.json();
+        detailsCache.clear();
         renderSessions(data.sessions || []);
       } catch (err) {
         console.error('[Sessions] Failed to load:', err);
@@ -920,6 +1008,7 @@
             `).join('')}
           </div>
           <div class="session-actions">
+            <button onclick="showDetailsModal('${session.domain}')">详情</button>
             <button onclick="checkDomain('${session.domain}')">验证</button>
             <button class="danger" onclick="deleteDomain('${session.domain}')">删除</button>
           </div>
@@ -933,6 +1022,111 @@
       switchPanel('webrtc');
       urlInput.value = url;
       goBtn.click();
+    }
+
+    const detailsCache = new Map(); // domain → cookies array; cleared on loadSessions
+
+    function formatExpires(ts) {
+      if (!ts) return '会话';
+      const d = new Date(ts * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      const expired = Date.now() / 1000 > ts;
+      const text = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      return expired ? `<span class="expired">${text}</span>` : text;
+    }
+
+    let currentModal = null;
+    let currentModalDomain = null;
+
+    async function showDetailsModal(domain) {
+      // Close existing modal if any
+      if (currentModal) {
+        closeDetailsModal();
+      }
+
+      // Fetch details
+      let cookies;
+      if (detailsCache.has(domain)) {
+        cookies = detailsCache.get(domain);
+      } else {
+        try {
+          const response = await fetch(`/api/sessions/${encodeURIComponent(domain)}/cookies`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+          cookies = data.cookies;
+          detailsCache.set(domain, cookies);
+        } catch (err) {
+          console.error('[Sessions] Details failed:', err);
+          alert('加载详情失败');
+          return;
+        }
+      }
+
+      // Create modal
+      currentModalDomain = domain;
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.onclick = (e) => { if (e.target === overlay) closeDetailsModal(); };
+
+      const content = document.createElement('div');
+      content.className = 'modal-content';
+      content.innerHTML = `
+        <div class="modal-header">
+          <h3>${domain} · Cookie 详情</h3>
+          <button class="modal-close" onclick="closeDetailsModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          ${renderDetailsHTML(domain, cookies)}
+        </div>
+      `;
+
+      overlay.appendChild(content);
+      document.body.appendChild(overlay);
+      currentModal = overlay;
+    }
+
+    function closeDetailsModal() {
+      if (currentModal) {
+        currentModal.remove();
+        currentModal = null;
+        currentModalDomain = null;
+      }
+    }
+
+    function renderDetailsHTML(domain, cookies) {
+      return cookies.map(c => `
+        <div class="cookie-row">
+          <span class="cookie-name">${c.name}</span>
+          <span class="cookie-value">${c.value}</span>
+          <span class="cookie-expires">${formatExpires(c.expires)}</span>
+          <span class="cookie-flags">${[
+            c.httpOnly ? 'HttpOnly' : '',
+            c.secure ? 'Secure' : '',
+            ['Strict', 'Lax', 'Extended'].includes(c.sameSite) ? `SameSite=${c.sameSite}` : ''
+          ].filter(Boolean).join(' · ')}</span>
+          <button class="cookie-del" onclick="deleteCookieRow('${domain}', '${c.name.replace(/'/g, "\\'")}')">✕</button>
+        </div>
+      `).join('');
+    }
+
+    async function deleteCookieRow(domain, name) {
+      if (!confirm(`确定删除 cookie ${name} 吗？`)) {
+        return;
+      }
+      try {
+        const response = await fetch(`/api/sessions/${encodeURIComponent(domain)}/cookies/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        closeDetailsModal();
+        loadSessions(); // rebuilds list; group disappears if now empty
+      } catch (err) {
+        console.error('[Sessions] Cookie delete failed:', err);
+        alert('删除失败');
+      }
     }
 
     async function checkDomain(domain) {
@@ -993,6 +1187,9 @@
     window.visitOrigin = visitOrigin;
     window.checkDomain = checkDomain;
     window.deleteDomain = deleteDomain;
+    window.showDetailsModal = showDetailsModal;
+    window.closeDetailsModal = closeDetailsModal;
+    window.deleteCookieRow = deleteCookieRow;
   </script>
 </body>
 </html>
