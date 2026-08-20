@@ -979,6 +979,12 @@
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
+        if (response.status === 503) {
+          // Browser not running — show specific message
+          sessionsListEl.innerHTML = '<div style="color: #8892b0; padding: 20px; text-align: center;">浏览器已释放，请点击刷新重新启动</div>';
+          return;
+        }
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }

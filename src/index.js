@@ -149,17 +149,23 @@ async function main() {
 
   // Handle idle timeout restart event
   idleTimeoutManager.onRestart = async () => {
+    await ensureBrowserStarted();
+  };
+
+  async function ensureBrowserStarted() {
     try {
       // about:blank keeps the user profile clean; in persistent mode login
       // state is on disk anyway — restart restores it automatically.
-      await browserSession.start({ url: "about:blank" });
-      await streamerSession.start();
-      await streamerPeer.start({ browserSession: streamerSession });
-      wireScreencast();
+      if (!browserSession._context) {
+        await browserSession.start({ url: "about:blank" });
+        await streamerSession.start();
+        await streamerPeer.start({ browserSession: streamerSession });
+        wireScreencast();
+      }
     } catch (err) {
       console.error('[IdleTimeout] Restart error:', err);
     }
-  };
+  }
 
   // Start idle timeout manager with initial client count
   idleTimeoutManager.start(wsManager.clients.size);
@@ -181,7 +187,8 @@ async function main() {
     sessionHandler,
     wsManager,
     env: cfg.auth,
-    getSessionRegistry: sessionRegistryGetter.getRegistry
+    getSessionRegistry: sessionRegistryGetter.getRegistry,
+    ensureBrowserStarted
   });
 
   // Start the server

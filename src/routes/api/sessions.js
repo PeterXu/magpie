@@ -5,15 +5,23 @@ import { Hono } from 'hono';
  * 创建 sessions REST API 路由
  * @param {Object} deps - 依赖
  * @param {Function} deps.getSessionRegistry - 获取 SessionRegistry 实例的函数
+ * @param {Function} deps.ensureBrowserStarted - 启动浏览器的函数（若未运行）
  */
-export function createSessionsRoute({ getSessionRegistry }) {
+export function createSessionsRoute({ getSessionRegistry, ensureBrowserStarted }) {
   const app = new Hono();
 
   // 获取已保存的登录态列表
   app.get('/', async (c) => {
-    const sessionRegistry = getSessionRegistry();
+    let sessionRegistry = getSessionRegistry();
     if (!sessionRegistry) {
-      return c.json({ error: 'Session registry not available' }, 503);
+      // Browser not running — try to start it
+      if (ensureBrowserStarted) {
+        await ensureBrowserStarted();
+        sessionRegistry = getSessionRegistry();
+      }
+      if (!sessionRegistry) {
+        return c.json({ error: 'Session registry not available' }, 503);
+      }
     }
     const sessions = await sessionRegistry.list();
     return c.json({ sessions });
