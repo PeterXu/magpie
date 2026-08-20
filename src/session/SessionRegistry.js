@@ -12,34 +12,84 @@ export class SessionRegistry {
   }
 
   /**
-   * 获取所有 domain 及其 cookie 数量
-   * @returns {Promise<Array<{domain: string, cookieCount: number}>>}
+   * 获取所有 domain 分组及其统计
+   * @returns {Promise<Array<{domain: string, cookieCount: number, subDomains: string[]}>>}
    */
   async list() {
     if (!this._context) return [];
 
     const cookies = await this._context.cookies();
-    const domainMap = new Map();
+    const groups = this._groupCookies(cookies);
 
-    for (const cookie of cookies) {
-      // 去掉前导点
-      const domain = cookie.domain.replace(/^\./, '');
-      domainMap.set(domain, (domainMap.get(domain) || 0) + 1);
-    }
-
-    return [...domainMap.entries()]
-      .map(([domain, cookieCount]) => ({ domain, cookieCount }))
+    return [...groups.entries()]
+      .map(([domain, g]) => ({ domain, cookieCount: g.cookieCount, subDomains: [...g.subDomains] }))
       .sort((a, b) => b.cookieCount - a.cookieCount);
   }
 
+  // Internal: group cookies into domain-keyed entries.
+  // Domain cookies (".baidu.com") become group keys ("baidu.com") — the site
+  // declares its subdomains share login state. Host-only cookies join the
+  // longest matching group key (www.baidu.com ends with ".baidu.com"), fold
+  // into a same-key group (bare "example.com" vs ".example.com"), or form
+  // their own group when no domain cookie claims them.
+  //
+  // rawDomains keeps the cookie domains verbatim (leading dot preserved) so
+  // delete() can clear each exact value without substring-matching collateral.
+  _groupCookies(cookies) {
+    const groups = new Map(); // key -> { cookieCount, subDomains: Set, rawDomains: Set }
+
+    // Pass 1: domain cookies (leading dot) establish shared groups.
+    for (const cookie of cookies) {
+      if (!cookie.domain.startsWith('.')) continue;
+      const key = cookie.domain.slice(1);
+      let g = groups.get(key);
+      if (!g) { g = { cookieCount: 0, subDomains: new Set(), rawDomains: new Set() }; groups.set(key, g); }
+      g.cookieCount += 1;
+      g.rawDomains.add(cookie.domain);
+    }
+
+    // Pass 2: host-only cookies join the longest matching shared group.
+    for (const cookie of cookies) {
+      if (cookie.domain.startsWith('.')) continue;
+      let target = null;
+      for (const key of groups.keys()) {
+        if (cookie.domain.endsWith('.' + key) && (!target || key.length > target.length)) {
+          target = key;
+        }
+      }
+      if (target) {
+        const g = groups.get(target);
+        g.cookieCount += 1;
+        g.subDomains.add(cookie.domain);
+        g.rawDomains.add(cookie.domain);
+      } else if (groups.has(cookie.domain)) {
+        // Bare-domain host-only cookie alongside ".example.com" — same site.
+        const g = groups.get(cookie.domain);
+        g.cookieCount += 1;
+        g.rawDomains.add(cookie.domain);
+      } else {
+        groups.set(cookie.domain, { cookieCount: 1, subDomains: new Set(), rawDomains: new Set([cookie.domain]) });
+      }
+    }
+
+    return groups;
+  }
+
   /**
-   * 删除指定 domain 的所有 cookies
-   * @param {string} domain
+   * 删除指定 domain 分组的全部 cookies（组键 domain cookie + 所有 subDomains）
+   * 按组内 cookie 的原始 domain 值（保留前导点）逐个清除，
+   * 不使用组键子串匹配，避免误删相似后缀域名。
+   * @param {string} domain - 组键（list() 返回的 domain 字段）
    */
   async delete(domain) {
     if (!this._context) return;
-    await this._context.clearCookies({ domain });
-    logger.log(`[SessionRegistry] Deleted cookies for domain: ${domain}`);
+    const cookies = await this._context.cookies();
+    const group = this._groupCookies(cookies).get(domain);
+    if (!group) return;
+    for (const raw of group.rawDomains) {
+      await this._context.clearCookies({ domain: raw });
+    }
+    logger.log(`[SessionRegistry] Deleted cookie group: ${domain} (${group.rawDomains.size} domains)`);
   }
 
   /**

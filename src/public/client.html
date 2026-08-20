@@ -904,7 +904,7 @@
         <div class="session-item" data-domain="${session.domain}">
           <div>
             <div class="session-domain" onclick="visitDomain('${session.domain}')">${session.domain}</div>
-            <div class="session-stats">Cookies: ${session.cookieCount || 0} | 检查时间: ${session.lastChecked || '-'}</div>
+            <div class="session-stats">Cookies: ${session.cookieCount || 0}${session.subDomains && session.subDomains.length ? ` · 含子域: ${session.subDomains.join(', ')}` : ''}</div>
           </div>
           <div class="session-actions">
             <button onclick="checkDomain('${session.domain}')">验证</button>
@@ -915,9 +915,19 @@
     }
 
     function visitDomain(domain) {
-      // Switch to webrtc panel and navigate to domain
+      // Switch to webrtc panel and navigate to domain.
+      // The magpie admin page itself runs plain HTTP — when the saved domain
+      // is the host we're served from, reuse this origin (scheme + port) so
+      // the remote browser doesn't hit https://host:443 and error out.
+      const adminHost = location.hostname;
+      let url;
+      if (domain === adminHost) {
+        url = location.origin + '/';
+      } else {
+        url = 'https://' + domain;
+      }
       switchPanel('webrtc');
-      urlInput.value = 'https://' + domain;
+      urlInput.value = url;
       goBtn.click();
     }
 
