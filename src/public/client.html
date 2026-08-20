@@ -475,6 +475,16 @@
       margin-top: 4px;
     }
 
+    .session-origin {
+      color: #5a57c4;
+      font-size: 12px;
+      margin-top: 2px;
+      cursor: pointer;
+    }
+    .session-origin:hover {
+      text-decoration: underline;
+    }
+
     .session-actions {
       display: flex;
       gap: 8px;
@@ -903,8 +913,11 @@
       sessionsListEl.innerHTML = sessions.map(session => `
         <div class="session-item" data-domain="${session.domain}">
           <div>
-            <div class="session-domain" onclick="visitDomain('${session.domain}')">${session.domain}</div>
-            <div class="session-stats">Cookies: ${session.cookieCount || 0}${session.subDomains && session.subDomains.length ? ` · 含子域: ${session.subDomains.join(', ')}` : ''}</div>
+            <div class="session-domain">${session.domain}</div>
+            <div class="session-stats">Cookies: ${session.cookieCount || 0}</div>
+            ${(session.origins || []).map(o => `
+              <div class="session-origin" onclick="visitOrigin('${o.url}')">${o.url} · ${o.cookieCount}</div>
+            `).join('')}
           </div>
           <div class="session-actions">
             <button onclick="checkDomain('${session.domain}')">验证</button>
@@ -914,18 +927,9 @@
       `).join('');
     }
 
-    function visitDomain(domain) {
-      // Switch to webrtc panel and navigate to domain.
-      // The magpie admin page itself runs plain HTTP — when the saved domain
-      // is the host we're served from, reuse this origin (scheme + port) so
-      // the remote browser doesn't hit https://host:443 and error out.
-      const adminHost = location.hostname;
-      let url;
-      if (domain === adminHost) {
-        url = location.origin + '/';
-      } else {
-        url = 'https://' + domain;
-      }
+    function visitOrigin(url) {
+      // Switch to webrtc panel and navigate to the recorded origin URL
+      // (scheme + port come from the cookie's sourcePort/sourceScheme).
       switchPanel('webrtc');
       urlInput.value = url;
       goBtn.click();
@@ -952,7 +956,7 @@
     }
 
     async function deleteDomain(domain) {
-      if (!confirm(`确定删除 ${domain} 的登录状态吗？`)) {
+      if (!confirm(`确定删除 ${domain} 的登录状态吗？（含该域名下所有服务）`)) {
         return;
       }
 
@@ -986,7 +990,7 @@
     };
 
     // Expose functions globally for inline onclick handlers
-    window.visitDomain = visitDomain;
+    window.visitOrigin = visitOrigin;
     window.checkDomain = checkDomain;
     window.deleteDomain = deleteDomain;
   </script>

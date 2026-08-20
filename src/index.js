@@ -57,14 +57,13 @@ function createBrowserSession({ wsManager, streamerPeer }) {
   return { browserSession, wireScreencast };
 }
 
-// SessionRegistry needs context, which is available only after browserSession.start()
-// Returns a getter function to delay instantiation
+// SessionRegistry needs context + pages with CDP sessions, available only
+// after browserSession.start(). Returns a getter function to delay instantiation.
 function createSessionRegistryGetter({ browserSession }) {
   return {
     getRegistry: () => {
-      const context = browserSession._context;
-      if (!context) return null;
-      return new SessionRegistry({ context });
+      if (!browserSession._context || browserSession._pages.size === 0) return null;
+      return new SessionRegistry({ browserSession });
     }
   };
 }

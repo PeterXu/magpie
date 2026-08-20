@@ -4,11 +4,24 @@ import { strictEqual, ok } from 'node:assert';
 import { chromium } from 'playwright';
 import { SessionRegistry } from '../../src/session/SessionRegistry.js';
 
-test('SessionRegistry.list returns empty array when no cookies', async () => {
+// Build a SessionRegistry over a real Playwright context, mirroring how
+// src/index.js passes browserSession (context + pages with CDP sessions).
+async function launchRegistry() {
   const browser = await chromium.launch();
   const context = await browser.newContext();
+  const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
+  const browserSession = {
+    _context: context,
+    _pages: new Map([[1, { page, cdp }]])
+  };
+  return { browser, context, browserSession };
+}
 
-  const registry = new SessionRegistry({ context });
+test('SessionRegistry.list returns empty array when no cookies', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+
+  const registry = new SessionRegistry({ browserSession });
   const sessions = await registry.list();
 
   strictEqual(sessions.length, 0);
@@ -18,8 +31,7 @@ test('SessionRegistry.list returns empty array when no cookies', async () => {
 });
 
 test('SessionRegistry.list groups cookies by domain', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   // Add cookies
   await context.addCookies([
@@ -28,7 +40,7 @@ test('SessionRegistry.list groups cookies by domain', async () => {
     { name: 'session3', value: 'c', domain: 'other.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   const sessions = await registry.list();
 
   strictEqual(sessions.length, 2);
@@ -41,14 +53,13 @@ test('SessionRegistry.list groups cookies by domain', async () => {
 });
 
 test('SessionRegistry.delete removes cookies for domain', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   await context.addCookies([
     { name: 'session', value: 'x', domain: 'example.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   await registry.delete('example.com');
 
   const cookies = await context.cookies();
@@ -59,8 +70,7 @@ test('SessionRegistry.delete removes cookies for domain', async () => {
 });
 
 test('SessionRegistry.list merges host-only subdomain into domain-cookie group', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   await context.addCookies([
     { name: 'a', value: '1', domain: '.baidu.com', path: '/' },
@@ -68,22 +78,22 @@ test('SessionRegistry.list merges host-only subdomain into domain-cookie group',
     { name: 'c', value: '3', domain: 'www.baidu.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   const sessions = await registry.list();
 
   strictEqual(sessions.length, 1);
   strictEqual(sessions[0].domain, 'baidu.com');
   strictEqual(sessions[0].cookieCount, 3);
-  strictEqual(sessions[0].subDomains.length, 1);
-  strictEqual(sessions[0].subDomains[0], 'www.baidu.com');
+  strictEqual(sessions[0].origins.length, 2);
+  ok(sessions[0].origins.some(o => o.url === 'http://baidu.com' && o.cookieCount === 2));
+  ok(sessions[0].origins.some(o => o.url === 'http://www.baidu.com' && o.cookieCount === 1));
 
   await context.close();
   await browser.close();
 });
 
 test('SessionRegistry.list keeps host-only domains separate without domain cookie', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   // No ".example.com" domain cookie — subdomains are separate account systems.
   await context.addCookies([
@@ -91,7 +101,7 @@ test('SessionRegistry.list keeps host-only domains separate without domain cooki
     { name: 'b', value: '2', domain: 'login.example.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   const sessions = await registry.list();
 
   strictEqual(sessions.length, 2);
@@ -104,8 +114,7 @@ test('SessionRegistry.list keeps host-only domains separate without domain cooki
 });
 
 test('SessionRegistry.list folds bare-domain host-only cookie into its domain-cookie group', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   // "example.com" (host-only) alongside ".example.com" (domain cookie) — one site.
   await context.addCookies([
@@ -113,21 +122,20 @@ test('SessionRegistry.list folds bare-domain host-only cookie into its domain-co
     { name: 'b', value: '2', domain: 'example.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   const sessions = await registry.list();
 
   strictEqual(sessions.length, 1);
   strictEqual(sessions[0].domain, 'example.com');
   strictEqual(sessions[0].cookieCount, 2);
-  strictEqual(sessions[0].subDomains.length, 0);
+  ok(Array.isArray(sessions[0].origins));
 
   await context.close();
   await browser.close();
 });
 
 test('SessionRegistry.list joins longest matching group when multiple groups match', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   // a.example.co matches both ".example.co" and ".co" groups (if a ".co"
   // domain cookie existed) — longest key wins. Here: two nested groups.
@@ -137,26 +145,27 @@ test('SessionRegistry.list joins longest matching group when multiple groups mat
     { name: 'c', value: '3', domain: 'x.sub.example.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   const sessions = await registry.list();
 
   // x.sub.example.com ends with ".sub.example.com" (longer) — joins that group,
   // not ".example.com".
   const sub = sessions.find(s => s.domain === 'sub.example.com');
   ok(sub, 'sub.example.com group exists');
-  strictEqual(sub.subDomains.length, 1);
-  strictEqual(sub.subDomains[0], 'x.sub.example.com');
+  strictEqual(sub.origins.length, 2);
+  strictEqual(sub.origins.filter(o => o.url.includes('x.sub.example.com')).length, 1);
+  ok(sub.origins.some(o => o.url === 'http://sub.example.com'));
   const top = sessions.find(s => s.domain === 'example.com');
   ok(top, 'example.com group exists');
-  strictEqual(top.subDomains.length, 0);
+  strictEqual(top.origins.length, 1);
+  strictEqual(top.origins[0].url, 'http://example.com');
 
   await context.close();
   await browser.close();
 });
 
 test('SessionRegistry.delete removes whole group including subdomains', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   await context.addCookies([
     { name: 'a', value: '1', domain: '.baidu.com', path: '/' },
@@ -164,7 +173,7 @@ test('SessionRegistry.delete removes whole group including subdomains', async ()
     { name: 'keep', value: '3', domain: 'other.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   await registry.delete('baidu.com');
 
   const cookies = await context.cookies();
@@ -177,8 +186,7 @@ test('SessionRegistry.delete removes whole group including subdomains', async ()
 });
 
 test('SessionRegistry.delete does not remove lookalike domains', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   // "notbaidu.com" contains "baidu.com" as a substring — must survive.
   await context.addCookies([
@@ -186,7 +194,7 @@ test('SessionRegistry.delete does not remove lookalike domains', async () => {
     { name: 'b', value: '2', domain: '.notbaidu.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   await registry.delete('baidu.com');
 
   const cookies = await context.cookies();
@@ -198,14 +206,13 @@ test('SessionRegistry.delete does not remove lookalike domains', async () => {
 });
 
 test('SessionRegistry.delete on unknown domain is a no-op', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const { browser, context, browserSession } = await launchRegistry();
 
   await context.addCookies([
     { name: 'a', value: '1', domain: '.example.com', path: '/' },
   ]);
 
-  const registry = new SessionRegistry({ context });
+  const registry = new SessionRegistry({ browserSession });
   await registry.delete('nomatch.com'); // must not throw
 
   const cookies = await context.cookies();
@@ -213,4 +220,96 @@ test('SessionRegistry.delete on unknown domain is a no-op', async () => {
 
   await context.close();
   await browser.close();
+});
+
+test('SessionRegistry.list splits same-host cookies into per-origin entries', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  const page = browserSession._pages.get(1).page;
+
+  // Two HTTP servers on different ports, same host 127.0.0.1.
+  const http = await import('node:http');
+  const mkServer = (cookieName) => {
+    const server = http.createServer((req, res) => {
+      res.setHeader('Set-Cookie', `${cookieName}=1; Path=/`);
+      res.end('ok');
+    });
+    return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+  };
+  const srvA = await mkServer('aaa');
+  const srvB = await mkServer('bbb');
+  const portA = srvA.address().port;
+  const portB = srvB.address().port;
+
+  await page.goto(`http://127.0.0.1:${portA}/`);
+  await page.goto(`http://127.0.0.1:${portB}/`);
+
+  const registry = new SessionRegistry({ browserSession });
+  const sessions = await registry.list();
+
+  strictEqual(sessions.length, 1);
+  strictEqual(sessions[0].domain, '127.0.0.1');
+  strictEqual(sessions[0].cookieCount, 2);
+  const urls = sessions[0].origins.map(o => o.url).sort();
+  strictEqual(urls[0], `http://127.0.0.1:${portA}`);
+  strictEqual(urls[1], `http://127.0.0.1:${portB}`);
+
+  srvA.close(); srvB.close();
+  await context.close();
+  await browser.close();
+});
+
+test('SessionRegistry.list omits default ports and maps Secure scheme', async () => {
+  // Inject cookies through the registry's own code path shape: raw CDP-style
+  // cookies with sourcePort/sourceScheme, via a stub _pages entry.
+  const fakeCdp = {
+    send: async (method, params) => {
+      strictEqual(method, 'Network.getCookies');
+      ok(Array.isArray(params.urls));
+      return {
+        cookies: [
+          { name: 's', value: '1', domain: 'secure.example.com', path: '/', sourcePort: 443, sourceScheme: 'Secure' },
+          { name: 'p', value: '1', domain: 'plain.example.com', path: '/', sourcePort: 80, sourceScheme: 'NonSecure' },
+          { name: 'q', value: '1', domain: 'odd.example.com', path: '/', sourcePort: 8443, sourceScheme: 'Secure' },
+        ]
+      };
+    }
+  };
+  const contextStub = {
+    cookies: async () => [
+      { name: 's', value: '1', domain: 'secure.example.com', path: '/' },
+      { name: 'p', value: '1', domain: 'plain.example.com', path: '/' },
+      { name: 'q', value: '1', domain: 'odd.example.com', path: '/' },
+    ],
+    clearCookies: async () => {}
+  };
+  const registry = new SessionRegistry({
+    browserSession: { _context: contextStub, _pages: new Map([[1, { cdp: fakeCdp }]]) }
+  });
+  const sessions = await registry.list();
+
+  const byDomain = Object.fromEntries(sessions.map(s => [s.domain, s]));
+  strictEqual(byDomain['secure.example.com'].origins[0].url, 'https://secure.example.com');
+  strictEqual(byDomain['plain.example.com'].origins[0].url, 'http://plain.example.com');
+  strictEqual(byDomain['odd.example.com'].origins[0].url, 'https://odd.example.com:8443');
+});
+
+test('SessionRegistry.list omits port when sourcePort missing', async () => {
+  const fakeCdp = {
+    send: async () => ({
+      cookies: [
+        { name: 'x', value: '1', domain: 'unknown.example.com', path: '/' },
+      ]
+    })
+  };
+  const contextStub = {
+    cookies: async () => [{ name: 'x', value: '1', domain: 'unknown.example.com', path: '/' }],
+    clearCookies: async () => {}
+  };
+  const registry = new SessionRegistry({
+    browserSession: { _context: contextStub, _pages: new Map([[1, { cdp: fakeCdp }]]) }
+  });
+  const sessions = await registry.list();
+
+  strictEqual(sessions.length, 1);
+  strictEqual(sessions[0].origins[0].url, 'http://unknown.example.com');
 });
