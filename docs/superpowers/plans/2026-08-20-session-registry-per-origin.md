@@ -542,7 +542,7 @@ Expected: 16 通过（13 + 3 route 测试，route 测试用 mock registry 不受
 npm start
 ```
 
-浏览器打开 http://localhost:8080/ → 登录 → “远程访问浏览器”面板访问两个不同端口的服务（如 http://localhost:8080 与任一其他本地服务）→ 切到“登录状态管理”→ 刷新 → 确认 `localhost` 条目下逐行显示两个 origin（含端口），点击各行跳转到对应完整 URL。
+浏览器打开 http://localhost:8080/ → 登录 → “远程浏览器”面板访问两个不同端口的服务（如 http://localhost:8080 与任一其他本地服务）→ 切到“登录状态管理”→ 刷新 → 确认 `localhost` 条目下逐行显示两个 origin（含端口），点击各行跳转到对应完整 URL。
 
 - [ ] **Step 5: 提交**
 

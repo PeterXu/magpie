@@ -472,7 +472,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 1: 在左侧导航添加新入口**
 
-在 `client.html` 中找到 `.nav-list` 区域，在"远程访问浏览器"后添加：
+在 `client.html` 中找到 `.nav-list` 区域，在"远程浏览器"后添加：
 
 ```html
 <!-- 在 <div class="nav-item" data-panel="webrtc"> ... </div> 之后添加 -->

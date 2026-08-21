@@ -427,7 +427,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 npm start
 ```
 
-浏览器打开 http://localhost:8080/ → 登录 → “远程访问浏览器”面板访问 baidu.com → 切到“登录状态管理”→ 刷新 → 确认只显示一条 `baidu.com` 且 stats 行含“含子域: www.baidu.com”。
+浏览器打开 http://localhost:8080/ → 登录 → “远程浏览器”面板访问 baidu.com → 切到“登录状态管理”→ 刷新 → 确认只显示一条 `baidu.com` 且 stats 行含“含子域: www.baidu.com”。
 
 - [ ] **Step 3: 提交**
 

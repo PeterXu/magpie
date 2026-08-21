@@ -56,7 +56,7 @@ docker run --rm -d -p 8080:8080 --shm-size 2gb \
 Open `http://localhost:8080/` in a browser:
 
 **UI Overview:**
-- **Left Panel**: Navigation with "项目介绍" (Project Intro) and "远程访问浏览器" (Remote Browser)
+- **Left Panel**: Navigation with "项目介绍" (Project Intro) and "远程浏览器" (Remote Browser)
 - **Project Intro**: Welcome page with feature cards and quick start
 - **Remote Browser**: WebRTC video streaming with manual connection control
 
