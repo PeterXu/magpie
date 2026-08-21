@@ -60,16 +60,11 @@ function createBrowserSession({ wsManager, streamerPeer }) {
 // SessionRegistry needs context + pages with CDP sessions, available only
 // after browserSession.start(). Returns a getter function to delay instantiation.
 function createSessionRegistryGetter({ browserSession }) {
-  let registry = null;  // Singleton instance
+  const registry = new SessionRegistry({ browserSession });
   return {
-    getRegistry: () => {
-      if (!browserSession._context || browserSession._pages.size === 0) return null;
-      // Reuse instance to preserve check results across calls
-      if (!registry) {
-        registry = new SessionRegistry({ browserSession });
-      }
-      return registry;
-    }
+    // Always return the instance: config endpoints work without a browser;
+    // cookie paths inside SessionRegistry already degrade on null _context.
+    getRegistry: () => registry
   };
 }
 

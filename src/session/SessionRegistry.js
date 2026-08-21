@@ -1,5 +1,7 @@
 // src/session/SessionRegistry.js
 import { logger } from '../utils/logger.js';
+import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 const CHECK_GOTO_TIMEOUT_MS = 15_000;  // single-domain full check budget
 const CHECK_STABLE_POLL_MS = 500;      // SPA redirect-chain settle poll interval
@@ -44,6 +46,9 @@ export class SessionRegistry {
     this._checkResults = new Map();   // domain → last check result (memory only)
     this._checkInFlight = new Map();  // domain → in-flight check Promise
     this._lastCheckAt = new Map();    // domain → ms timestamp (rate limiting)
+    this._checkUrls = new Map();      // domain → user-configured check URL
+    this._checkUrlsFile = this._deriveCheckUrlsFile();
+    this._checkUrlsReady = this._loadCheckUrls();
   }
 
   // Internal: any page's CDP session works — Network.getCookies is a
@@ -90,7 +95,7 @@ export class SessionRegistry {
     const cookies = await this._fetchCookies();
     const groups = this._groupCookies(cookies);
 
-    return [...groups.entries()]
+    const items = [...groups.entries()]
       .map(([domain, g]) => {
         const item = {
           domain,
@@ -107,10 +112,34 @@ export class SessionRegistry {
             checkedAt: lastCheckResult.checkedAt,
           };
         }
+        const checkUrl = this._checkUrls.get(domain);
+        if (checkUrl) {
+          item.checkUrl = checkUrl;
+        }
         return item;
       })
       // Stable sort: cookieCount desc, then domain asc (preserves order on refresh)
       .sort((a, b) => b.cookieCount - a.cookieCount || a.domain.localeCompare(b.domain));
+
+    // Append group-level check results that have no cookie group entries
+    // (i.e., check('grouproot.com') ran but the domain has no cookies stored)
+    const knownDomains = new Set(items.map(i => i.domain));
+    for (const [domain, checkResult] of this._checkResults.entries()) {
+      if (!knownDomains.has(domain)) {
+        items.push({
+          domain,
+          cookieCount: 0,
+          origins: [],
+          lastCheck: {
+            valid: checkResult.valid,
+            strategy: checkResult.strategy,
+            checkedAt: checkResult.checkedAt,
+          },
+        });
+      }
+    }
+
+    return items;
   }
 
   // Internal: group cookies into domain-keyed entries (level 1: cookie
@@ -250,6 +279,60 @@ export class SessionRegistry {
     return this._recordCheck(domain, { valid: null, strategy, note: 'not-implemented' });
   }
 
+  // Internal: config file path — sibling browser-data/ of the profile dir,
+  // else cwd browser-data/. The profile dir itself is Chromium-owned and may
+  // be wiped by the browser, so the config lives one level up.
+  _deriveCheckUrlsFile() {
+    const userDataDir = this._browserSession._userDataDir;
+    const base = userDataDir ? path.dirname(userDataDir) : process.cwd();
+    return path.join(base, 'browser-data', 'session-check-urls.json');
+  }
+
+  // Internal: read config into _checkUrls. Missing file → empty. Corrupt →
+  // empty + one log line (config is user-fixable, don't crash the registry).
+  // Returns a promise that resolves when loading completes.
+  _loadCheckUrls() {
+    return readFile(this._checkUrlsFile, 'utf8')
+      .then(text => {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (const [k, v] of Object.entries(parsed)) {
+            if (typeof k === 'string' && typeof v === 'string') this._checkUrls.set(k, v);
+          }
+        }
+      })
+      .catch(() => { /* missing or corrupt: start empty */ });
+  }
+
+  // Public config API — GET/PUT/DELETE /api/sessions/:domain/check-url back onto these.
+  getCheckUrl(domain) {
+    return this._checkUrls.get(domain) ?? null;
+  }
+
+  async setCheckUrl(domain, url) {
+    await this._checkUrlsReady;
+    this._checkUrls.set(domain, url);
+    await this._persistCheckUrls();
+    logger.log(`[SessionRegistry] Check URL set: ${domain} → ${url}`);
+  }
+
+  async clearCheckUrl(domain) {
+    await this._checkUrlsReady;
+    this._checkUrls.delete(domain);
+    await this._persistCheckUrls();
+    logger.log(`[SessionRegistry] Check URL cleared: ${domain}`);
+  }
+
+  // Internal: atomic write — tmp file + rename, so a crash mid-write never
+  // leaves a half-written config behind.
+  async _persistCheckUrls() {
+    const file = this._checkUrlsFile;
+    await mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, JSON.stringify(Object.fromEntries(this._checkUrls), null, 2));
+    await rename(tmp, file);
+  }
+
   // Internal: store result and stamp the rate-limit clock.
   _recordCheck(domain, result) {
     const entry = { ...result, checkedAt: Date.now() };
@@ -282,7 +365,9 @@ export class SessionRegistry {
     }
     const cookies = await this._fetchCookies();
     const group = this._groupCookies(cookies).get(domain);
-    const checkUrl = overrideUrl ?? this._pickCheckUrl(group, domain);
+    const checkUrl = overrideUrl
+      ?? this._checkUrls.get(domain)
+      ?? this._pickCheckUrl(group, domain);
 
     const page = await browserSession.openHiddenPage();
     if (!page) {

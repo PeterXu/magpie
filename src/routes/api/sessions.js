@@ -84,6 +84,37 @@ export function createSessionsRoute({ getSessionRegistry, ensureBrowserStarted }
     return c.json({ success: true });
   });
 
+  // 自定义检测 URL 配置（不依赖浏览器运行）
+  app.get('/:domain/check-url', async (c) => {
+    const sessionRegistry = getSessionRegistry();
+    if (!sessionRegistry) return c.json({ url: null });
+    return c.json({ url: sessionRegistry.getCheckUrl(c.req.param('domain')) });
+  });
+
+  app.put('/:domain/check-url', async (c) => {
+    const sessionRegistry = getSessionRegistry();
+    if (!sessionRegistry) return c.json({ error: 'Session registry not available' }, 503);
+    const domain = c.req.param('domain');
+    const body = await c.req.json().catch(() => ({}));
+    const url = typeof body.url === 'string' ? body.url.trim() : '';
+    if (url === '') {
+      await sessionRegistry.clearCheckUrl(domain);
+      return c.json({ success: true, url: null });
+    }
+    if (!/^https?:\/\//.test(url)) {
+      return c.json({ error: 'URL must start with http:// or https://' }, 400);
+    }
+    await sessionRegistry.setCheckUrl(domain, url);
+    return c.json({ success: true, url });
+  });
+
+  app.delete('/:domain/check-url', async (c) => {
+    const sessionRegistry = getSessionRegistry();
+    if (!sessionRegistry) return c.json({ error: 'Session registry not available' }, 503);
+    await sessionRegistry.clearCheckUrl(c.req.param('domain'));
+    return c.json({ success: true });
+  });
+
   // 访问该网站（在远程浏览器中打开）
   app.post('/:domain/visit', async (c) => {
     const domain = c.req.param('domain');

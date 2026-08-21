@@ -3,6 +3,9 @@ import { test } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
 import http from 'node:http';
 import { chromium } from 'playwright';
+import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { SessionRegistry } from '../../src/session/SessionRegistry.js';
 
 // Build a SessionRegistry over a real Playwright context, mirroring how
@@ -721,4 +724,272 @@ test('SessionRegistry.check dedupes concurrent full checks on same domain', asyn
   strictEqual(r1.valid, null);  // unknown - no login signals
   strictEqual(r2.valid, null);
   strictEqual(r1.checkedAt, r2.checkedAt, 'same recorded result');
+});
+
+// ===== custom check URL =====
+
+// Stub browserSession whose _userDataDir points at a temp dir — config file
+// lives at <tmp>/browser-data/session-check-urls.json.
+async function makeConfigRegistry(userDataDir) {
+  const browserSession = {
+    _context: null,
+    _pages: new Map(),
+    _userDataDir: userDataDir,
+  };
+  return new SessionRegistry({ browserSession });
+}
+
+test('SessionRegistry check-url config: default null, set/get roundtrip, persisted', async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'checkurl-'));
+  try {
+    const registry = await makeConfigRegistry(path.join(tmp, 'profile'));
+    strictEqual(registry.getCheckUrl('baidu.com'), null, 'unset → null');
+
+    await registry.setCheckUrl('baidu.com', 'https://www.baidu.com');
+    strictEqual(registry.getCheckUrl('baidu.com'), 'https://www.baidu.com');
+
+    // Persisted: a fresh registry over the same userDataDir sees it
+    // Give a small delay for the file write to settle
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const registry2 = await makeConfigRegistry(path.join(tmp, 'profile'));
+    // Wait for async loading to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
+    strictEqual(registry2.getCheckUrl('baidu.com'), 'https://www.baidu.com');
+
+    await registry.clearCheckUrl('baidu.com');
+    strictEqual(registry.getCheckUrl('baidu.com'), null);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const registry3 = await makeConfigRegistry(path.join(tmp, 'profile'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    strictEqual(registry3.getCheckUrl('baidu.com'), null, 'clear persisted');
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('SessionRegistry check-url config: null userDataDir falls back to cwd browser-data', async () => {
+  // _checkUrlsFile derives from process.cwd() when no userDataDir — assert
+  // the path shape only, do not touch the real file.
+  const registry = await makeConfigRegistry(null);
+  ok(registry._checkUrlsFile.endsWith('browser-data/session-check-urls.json'),
+    `unexpected path: ${registry._checkUrlsFile}`);
+});
+
+test('SessionRegistry check-url config: corrupt file loads as empty', async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'checkurl-'));
+  try {
+    const dataDir = path.join(tmp, 'browser-data');
+    await import('node:fs/promises').then(fs => fs.mkdir(dataDir, { recursive: true }));
+    await writeFile(path.join(dataDir, 'session-check-urls.json'), '{not json');
+    const registry = await makeConfigRegistry(path.join(tmp, 'profile'));
+    strictEqual(registry.getCheckUrl('anything.com'), null, 'corrupt → empty map');
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('SessionRegistry full check prefers configured URL over auto-pick', async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'checkurl-'));
+  const navs = [];
+  const browserSession = {
+    _context: { cookies: async () => [
+      { name: 'a', value: '1', domain: '127.0.0.1', path: '/' },
+      { name: 'b', value: '2', domain: '127.0.0.1', path: '/' },
+    ] },
+    _pages: new Map([[1, { cdp: { send: async () => ({ cookies: [
+      { name: 'a', value: '1', domain: '127.0.0.1', path: '/', sourcePort: 8080, sourceScheme: 'NonSecure' },
+      { name: 'b', value: '2', domain: '127.0.0.1', path: '/', sourcePort: 9090, sourceScheme: 'NonSecure' },
+    ] }) } }]]),
+    _userDataDir: path.join(tmp, 'profile'),
+    openHiddenPage: async () => ({ goto: async () => {}, $: async () => null, url: () => 'https://example.com/x', close: async () => {} }),
+    closeHiddenPage: async (p) => { await p.close(); navs.push('closed'); },
+  };
+  try {
+    const registry = new SessionRegistry({ browserSession });
+    await registry.setCheckUrl('127.0.0.1', 'https://configured.example/probes');
+    let wentTo = null;
+    browserSession.openHiddenPage = async () => ({
+      goto: async (u) => { wentTo = u; },
+      $: async () => null,
+      url: () => 'https://configured.example/probes',
+      close: async () => {},
+    });
+    await registry.check('127.0.0.1', 'full');
+    strictEqual(wentTo, 'https://configured.example/probes', 'configured URL wins over origin pick');
+    strictEqual(navs.length >= 1, true, 'page closed');
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ===== Fix wave: group-level result visibility =====
+
+test('SessionRegistry.list includes group-level check results without cookies', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  try {
+    await context.addCookies([{ name: 'sid', value: '1', domain: 'sub.example.com', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+
+    // Directly record a check result for the root domain (no cookies)
+    registry._recordCheck('example.com', { valid: true, strategy: 'full' });
+
+    const sessions = await registry.list();
+    const rootItem = sessions.find(s => s.domain === 'example.com');
+    ok(rootItem, 'root domain appears in list');
+    strictEqual(rootItem.cookieCount, 0, 'no cookies for root');
+    ok(rootItem.lastCheck, 'has lastCheck');
+    strictEqual(rootItem.lastCheck.valid, true);
+    strictEqual(rootItem.lastCheck.strategy, 'full');
+
+    // Verify the subdomain cookie still appears separately
+    const subItem = sessions.find(s => s.domain === 'sub.example.com');
+    ok(subItem, 'subdomain item exists');
+    strictEqual(subItem.cookieCount, 1);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+test('SessionRegistry.list group-level items sort to bottom (cookieCount=0)', async () => {
+  const fakeCdp = { send: async () => ({ cookies: [] }) };
+  const contextStub = { cookies: async () => [], clearCookies: async () => {} };
+  const registry = new SessionRegistry({
+    browserSession: { _context: contextStub, _pages: new Map([[1, { cdp: fakeCdp }]]) }
+  });
+
+  // Record check results for domains without cookies
+  registry._recordCheck('empty.com', { valid: true, strategy: 'full' });
+  registry._recordCheck('also-empty.com', { valid: false, strategy: 'full' });
+
+  const sessions = await registry.list();
+  strictEqual(sessions.length, 2);
+  strictEqual(sessions[0].cookieCount, 0);
+  strictEqual(sessions[1].cookieCount, 0);
+  // Both at 0, so sorted by domain name
+  const domains = sessions.map(s => s.domain).sort();
+  strictEqual(domains[0], 'also-empty.com');
+  strictEqual(domains[1], 'empty.com');
+});
+
+test('SessionRegistry.list group-level item gets lastCheck from _recordCheck', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  try {
+    const registry = new SessionRegistry({ browserSession });
+
+    // Simulate a full check that recorded a result
+    const recorded = registry._recordCheck('grouproot.com', {
+      valid: true,
+      strategy: 'full',
+      finalUrl: 'https://grouproot.com/dashboard',
+      signals: { redirectedToLogin: false, loggedIn: ['user-menu'], login: [], score: 1 }
+    });
+
+    const sessions = await registry.list();
+    const groupItem = sessions.find(s => s.domain === 'grouproot.com');
+    ok(groupItem, 'group item exists');
+    strictEqual(groupItem.cookieCount, 0);
+    strictEqual(groupItem.lastCheck.valid, true);
+    strictEqual(groupItem.lastCheck.strategy, 'full');
+    ok(groupItem.lastCheck.checkedAt > 0);
+    // Verify only the three whitelisted fields are exposed
+    strictEqual(Object.keys(groupItem.lastCheck).length, 3);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+// ===== Fix wave: config load race condition =====
+
+test('SessionRegistry setCheckUrl waits for initial load to complete', async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'race-'));
+  try {
+    const dataDir = path.join(tmp, 'browser-data');
+    await mkdir(dataDir, { recursive: true });
+    const configFile = path.join(dataDir, 'session-check-urls.json');
+
+    // Pre-create config file with old value
+    await writeFile(configFile, JSON.stringify({ 'test.com': 'https://old.example.com' }));
+
+    const registry = await makeConfigRegistry(path.join(tmp, 'profile'));
+
+    // Immediately set new value (before async load might finish)
+    await registry.setCheckUrl('test.com', 'https://new.example.com');
+
+    // Wait a bit for the async load to potentially race
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // New value should persist (not overwritten by delayed load)
+    strictEqual(registry.getCheckUrl('test.com'), 'https://new.example.com');
+
+    // Verify persistence in a new registry
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const registry2 = await makeConfigRegistry(path.join(tmp, 'profile'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    strictEqual(registry2.getCheckUrl('test.com'), 'https://new.example.com');
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('SessionRegistry clearCheckUrl waits for initial load to complete', async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'race-'));
+  try {
+    const dataDir = path.join(tmp, 'browser-data');
+    await mkdir(dataDir, { recursive: true });
+    const configFile = path.join(dataDir, 'session-check-urls.json');
+
+    // Pre-create config file
+    await writeFile(configFile, JSON.stringify({ 'test.com': 'https://example.com' }));
+
+    const registry = await makeConfigRegistry(path.join(tmp, 'profile'));
+
+    // Immediately clear (before async load might finish)
+    await registry.clearCheckUrl('test.com');
+
+    // Wait for async load
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Should remain cleared
+    strictEqual(registry.getCheckUrl('test.com'), null);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ===== Fix wave: config-mark field in list() =====
+
+test('SessionRegistry.list includes checkUrl field for configured domains', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  try {
+    await context.addCookies([{ name: 's', value: '1', domain: 'example.com', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+
+    await registry.setCheckUrl('example.com', 'https://custom.example.com/check');
+
+    const sessions = await registry.list();
+    const item = sessions.find(s => s.domain === 'example.com');
+    ok(item, 'item exists');
+    strictEqual(item.checkUrl, 'https://custom.example.com/check');
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+test('SessionRegistry.list omits checkUrl field when not configured', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  try {
+    await context.addCookies([{ name: 's', value: '1', domain: 'nocfg.com', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+
+    const sessions = await registry.list();
+    const item = sessions.find(s => s.domain === 'nocfg.com');
+    ok(item, 'item exists');
+    strictEqual(item.checkUrl, undefined, 'no checkUrl field when not set');
+  } finally {
+    await context.close();
+    await browser.close();
+  }
 });

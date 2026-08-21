@@ -561,6 +561,26 @@
     .session-subitem .session-domain {
       font-size: 13px;
     }
+    .checkurl-dialog-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.4);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1500;
+    }
+    .checkurl-dialog {
+      background: #fff; border-radius: 8px; padding: 20px;
+      width: 400px; max-width: 90vw;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .checkurl-dialog h4 { margin: 0 0 8px; font-size: 15px; color: #2c3e50; }
+    .checkurl-dialog p { margin: 0 0 12px; font-size: 12px; color: #8892b0; }
+    .checkurl-dialog input {
+      width: 100%; box-sizing: border-box; padding: 8px 10px;
+      border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px;
+      margin-bottom: 16px;
+    }
+    .checkurl-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .config-mark { font-size: 11px; color: #8892b0; cursor: help; margin-left: 4px; }
 
     /* Modal styles */
     .modal-overlay {
@@ -1133,10 +1153,11 @@
     }
 
     function renderSessionItem(session) {
+      const configMark = session.checkUrl ? `<span class="config-mark" title="${session.checkUrl}">⚙</span>` : '';
       return `
         <div class="session-item" data-domain="${session.domain}">
           <div>
-            <div class="session-domain">${session.domain}</div>
+            <div class="session-domain">${session.domain}${configMark}</div>
             ${renderStatusLine(session.lastCheck)}
             <div class="session-stats">Cookies: ${session.cookieCount || 0}</div>
             ${(session.origins || []).map(o => `
@@ -1144,6 +1165,7 @@
             `).join('')}
           </div>
           <div class="session-actions">
+            <button onclick="openCheckUrlDialog('${session.domain}')">⚙</button>
             <button onclick="showDetailsModal('${session.domain}')">详情</button>
             <button onclick="checkDomain('${session.domain}', this)">验证</button>
             <button class="danger" onclick="deleteDomain('${session.domain}')">删除</button>
@@ -1155,24 +1177,33 @@
     function renderSessionGroup(root, items) {
       const totalCookies = items.reduce((sum, s) => sum + s.cookieCount, 0);
       const expanded = window.sessionGroupExpanded?.has(root) ? 'expanded' : '';
-      const latestCheck = items
+      // Prefer root domain's own lastCheck, fallback to member aggregation
+      const rootItem = items.find(s => s.domain === root);
+      const latestCheck = rootItem?.lastCheck || items
         .map(s => s.lastCheck)
         .filter(Boolean)
         .sort((a, b) => b.checkedAt - a.checkedAt)[0];
+      const configMark = rootItem?.checkUrl ? `<span class="config-mark" title="${rootItem.checkUrl}">⚙</span>` : '';
 
       return `
         <div class="session-group ${expanded}" data-root="${root}">
           <div class="session-group-header" onclick="toggleSessionGroup('${root}')">
             <span class="session-group-arrow">${expanded ? '▼' : '▶'}</span>
-            <span class="session-group-domain">${root}</span>
+            <span class="session-group-domain">${root}${configMark}</span>
             <span class="session-group-count">${items.length} 个服务 · ${totalCookies} cookies</span>
+            <span onclick="event.stopPropagation()">
+              <button onclick="checkGroupFromHeader('${root}', this)">验证</button>
+              <button onclick="openCheckUrlDialog('${root}')">⚙</button>
+            </span>
           </div>
           ${renderStatusLine(latestCheck)}
           <div class="session-group-items">
-            ${items.map(item => `
+            ${items.map(item => {
+              const itemConfigMark = item.checkUrl ? `<span class="config-mark" title="${item.checkUrl}">⚙</span>` : '';
+              return `
               <div class="session-item session-subitem" data-domain="${item.domain}">
                 <div>
-                  <div class="session-domain">${item.domain}</div>
+                  <div class="session-domain">${item.domain}${itemConfigMark}</div>
                   <div class="session-stats">Cookies: ${item.cookieCount || 0}</div>
                   ${(item.origins || []).slice(0, 2).map(o => `
                     <div class="session-origin" onclick="visitOrigin('${o.url}')">${o.url} · ${o.cookieCount}</div>
@@ -1183,7 +1214,8 @@
                   <button class="danger" onclick="event.stopPropagation(); deleteDomain('${item.domain}')">删除</button>
                 </div>
               </div>
-            `).join('')}
+            `;
+            }).join('')}
           </div>
         </div>
       `;
@@ -1206,6 +1238,76 @@
         window.sessionGroupExpanded.add(root);
       }
       loadSessions(); // Re-render with updated state
+    }
+
+    let checkUrlDialogDomain = null;
+
+    function openCheckUrlDialog(domain) {
+      checkUrlDialogDomain = domain;
+      const overlay = document.createElement('div');
+      overlay.className = 'checkurl-dialog-overlay';
+      overlay.id = 'checkurl-dialog';
+      overlay.onclick = (e) => { if (e.target === overlay) closeCheckUrlDialog(); };
+      overlay.innerHTML = `
+        <div class="checkurl-dialog">
+          <h4>${domain} 检测 URL</h4>
+          <p>留空使用自动选择（按 cookie 数最多的来源）</p>
+          <input type="text" id="checkurl-input" placeholder="https://...">
+          <div class="dialog-actions">
+            <button onclick="clearCheckUrlConfig()">清除</button>
+            <button onclick="saveCheckUrl()">保存</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      fetch(`/api/sessions/${encodeURIComponent(domain)}/check-url`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(({ url }) => {
+          document.getElementById('checkurl-input').value = url || '';
+        })
+        .catch(() => {});
+      document.getElementById('checkurl-input').focus();
+    }
+
+    function closeCheckUrlDialog() {
+      document.getElementById('checkurl-dialog')?.remove();
+      checkUrlDialogDomain = null;
+    }
+
+    async function saveCheckUrl() {
+      const url = document.getElementById('checkurl-input').value.trim();
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(checkUrlDialogDomain)}/check-url`, {
+          method: 'PUT',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        closeCheckUrlDialog();
+        showToast('检测 URL 已保存', 'success');
+        loadSessions();
+      } catch (err) {
+        console.error('[Sessions] Save check URL failed:', err);
+        showToast('保存失败（需以 http(s):// 开头）', 'error');
+      }
+    }
+
+    async function clearCheckUrlConfig() {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(checkUrlDialogDomain)}/check-url`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        closeCheckUrlDialog();
+        showToast('检测 URL 已清除', 'success');
+        loadSessions();
+      } catch (err) {
+        console.error('[Sessions] Clear check URL failed:', err);
+        showToast('清除失败', 'error');
+      }
     }
 
     const detailsCache = new Map(); // domain → cookies array; cleared on loadSessions
@@ -1236,6 +1338,27 @@
           ? '<span class="badge-valid">✓ 已登录</span>'
           : '<span class="badge-invalid">✗ 未登录</span>';
       return `<div class="session-status">${badge}<span class="badge-meta"> · ${strategy} · ${formatRelativeTime(checkedAt)}</span></div>`;
+    }
+
+    async function checkGroupFromHeader(root, btn) {
+      if (btn) { btn.disabled = true; btn.textContent = '验证中…'; }
+      try {
+        const response = await fetch(`/api/sessions/${encodeURIComponent(root)}/check`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        await loadSessions();
+        if (result.valid === true) showToast(`${root}: 已登录`, 'success');
+        else if (result.valid === false) showToast(`${root}: 未登录`, 'error');
+        else showToast(`${root}: 未知状态`, 'warning');
+      } catch (err) {
+        console.error('[Sessions] Group check failed:', err);
+        showToast('验证失败', 'error');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '验证'; }
+      }
     }
 
     function formatExpires(ts) {
@@ -1410,6 +1533,11 @@
     window.showDetailsModal = showDetailsModal;
     window.closeDetailsModal = closeDetailsModal;
     window.deleteCookieRow = deleteCookieRow;
+    window.openCheckUrlDialog = openCheckUrlDialog;
+    window.closeCheckUrlDialog = closeCheckUrlDialog;
+    window.saveCheckUrl = saveCheckUrl;
+    window.clearCheckUrlConfig = clearCheckUrlConfig;
+    window.checkGroupFromHeader = checkGroupFromHeader;
   </script>
 </body>
 </html>

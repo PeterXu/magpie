@@ -173,3 +173,74 @@ test('POST /api/sessions/:domain/check returns 503 when browser cannot start', a
   });
   strictEqual(res.status, 503);
 });
+
+test('GET /api/sessions/:domain/check-url returns null when unset', async () => {
+  const registry = { getCheckUrl: () => null };
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({
+    getSessionRegistry: () => registry,
+    ensureBrowserStarted: async () => {}
+  }));
+
+  const res = await app.request('/api/sessions/example.com/check-url');
+  strictEqual(res.status, 200);
+  strictEqual((await res.json()).url, null);
+});
+
+
+test('PUT /api/sessions/:domain/check-url saves and rejects bad URLs', async () => {
+  const saved = {};
+  const registry = {
+    getCheckUrl: (d) => saved[d] ?? null,
+    setCheckUrl: async (d, u) => { saved[d] = u; },
+    clearCheckUrl: async (d) => { delete saved[d]; },
+  };
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({
+    getSessionRegistry: () => registry,
+    ensureBrowserStarted: async () => {}
+  }));
+
+  // Valid
+  let res = await app.request('/api/sessions/example.com/check-url', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://example.com/profile' })
+  });
+  strictEqual(res.status, 200);
+  strictEqual((await res.json()).url, 'https://example.com/profile');
+
+  // Bad scheme → 400
+  res = await app.request('/api/sessions/example.com/check-url', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'example.com' })
+  });
+  strictEqual(res.status, 400);
+
+  // Empty string → delete semantics
+  res = await app.request('/api/sessions/example.com/check-url', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: '' })
+  });
+  strictEqual(res.status, 200);
+  strictEqual((await res.json()).url, null);
+  strictEqual(saved['example.com'], undefined);
+});
+
+test('DELETE /api/sessions/:domain/check-url clears config without browser', async () => {
+  let cleared = null;
+  const registry = {
+    getCheckUrl: () => 'https://x',
+    setCheckUrl: async () => {},
+    clearCheckUrl: async (d) => { cleared = d; },
+  };
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({
+    getSessionRegistry: () => registry,
+    ensureBrowserStarted: async () => {}
+  }));
+
+  const res = await app.request('/api/sessions/example.com/check-url', { method: 'DELETE' });
+  strictEqual(res.status, 200);
+  strictEqual(cleared, 'example.com');
+  strictEqual((await res.json()).success, true);
+});
