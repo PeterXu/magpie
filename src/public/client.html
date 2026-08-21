@@ -667,9 +667,9 @@
       <div id="bar">
         <button id="back" title="Back" aria-label="Back" disabled>◀</button>
         <button id="fwd" title="Forward" aria-label="Forward" disabled>▶</button>
-        <button id="refresh" title="Reload" aria-label="Reload">⟳</button>
-        <input id="url" placeholder="https://..." />
-        <button id="go">Go</button>
+        <button id="refresh" title="Reload" aria-label="Reload" disabled>⟳</button>
+        <input id="url" disabled placeholder="https://..." />
+        <button id="go" disabled>Go</button>
 
         <!-- Connection status and control -->
         <div class="connection-status">
@@ -757,12 +757,31 @@
         statusText.textContent = '已连接';
         connectBtn.style.display = 'none';
         disconnectBtn.style.display = 'inline-block';
+        applyOnline();
       } else {
         statusDot.classList.remove('connected');
         statusText.textContent = '未连接';
         connectBtn.style.display = 'inline-block';
         disconnectBtn.style.display = 'none';
+        applyOffline();
       }
+    }
+
+    function applyOnline() {
+      refreshBtn.disabled = false;
+      urlInput.disabled = false;
+      goBtn.disabled = false;
+    }
+
+    function applyOffline() {
+      refreshBtn.disabled = true;
+      urlInput.disabled = true;
+      urlInput.value = '';
+      goBtn.disabled = true;
+      backBtn.disabled = true;
+      fwdBtn.disabled = true;
+      const container = document.getElementById("tabs");
+      container.innerHTML = "";
     }
 
     // Server-reported nav state → URL bar + back/forward disabled state.
