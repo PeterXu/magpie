@@ -32,6 +32,10 @@ export class BrowserSession {
     this.onTabsChange = null;       // fires with { pages, activeId }
     this._resolveNewPageId = null;  // resolver for newPage() to wait for registration
     this._newPageInProgress = false; // lock to prevent concurrent newPage() calls
+    this._hiddenPages = new Set();  // background utility pages (checks, probes):
+    // never in _pages, never frozen, never switch targets — invisible to the user.
+    this._pendingHidden = false;    // openHiddenPage() in flight: context.on('page')
+    // may fire before newPage() resolves, so the filter needs this flag too.
     this._switchInProgress = null;   // queued mutex for _switchTo (freeze/unfreeze interleaving)
     this._crashFired = false;
     this._intentionalStop = false;
@@ -278,6 +282,29 @@ export class BrowserSession {
     // _registerPage is called by context.on('page'), not here.
   }
 
+  // Public: open a hidden utility page — usable for background checks.
+  // Not registered in _pages: absent from the tab list, never frozen,
+  // never steals the active page or screencast. Null when not started.
+  async openHiddenPage() {
+    if (!this._context) return null;
+    this._pendingHidden = true;
+    try {
+      const page = await this._context.newPage();
+      this._hiddenPages.add(page);
+      page.on("close", () => this._hiddenPages.delete(page));
+      return page;
+    } finally {
+      this._pendingHidden = false;
+    }
+  }
+
+  // Public: close a page opened by openHiddenPage(). Null-safe.
+  async closeHiddenPage(page) {
+    if (!page) return;
+    this._hiddenPages.delete(page);
+    try { await page.close(); } catch {}
+  }
+
   getTabsState() {
     const pages = [...this._pages.entries()].map(([id, entry]) => ({
       id,
@@ -337,6 +364,7 @@ export class BrowserSession {
     let resolveInitialId;
     const initialIdPromise = new Promise(r => { resolveInitialId = r; });
     this._context.on("page", (page) => {
+      if (this._pendingHidden || this._hiddenPages.has(page)) return;
       this._registerPage(page).then(id => {
         // First page created becomes the active page
         if (resolveInitialId) {
@@ -431,6 +459,10 @@ export class BrowserSession {
       try { await entry.page.close(); } catch {}
     }
     this._pages.clear();
+    for (const page of this._hiddenPages) {
+      try { await page.close(); } catch {}
+    }
+    this._hiddenPages.clear();
     try { if (this._context) await this._context.close(); } catch {}
     if (this._ownsBrowser && this._browser) { try { await this._browser.close(); } catch {} }
     this._browser = this._context = this._activePageId = null;

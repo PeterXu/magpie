@@ -1,6 +1,7 @@
 // test/session/test-SessionRegistry.js
 import { test } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
+import http from 'node:http';
 import { chromium } from 'playwright';
 import { SessionRegistry } from '../../src/session/SessionRegistry.js';
 
@@ -437,4 +438,287 @@ test('SessionRegistry.deleteCookie is a no-op for unknown domain or name', async
 
   await context.close();
   await browser.close();
+});
+
+// ===== full check strategy =====
+// Local HTTP sites serve deterministic login/logged-in pages; the hidden
+// page is a real Playwright page (hidden channel itself is tested in
+// test/browser/BrowserSession.hidden-page.test.js).
+
+function serveCheckSite(handler) {
+  const server = http.createServer(handler);
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
+  });
+}
+
+// Registry whose browserSession stub wraps a real context so hidden pages
+// are real pages; records hidden-page opens for assertions.
+// cdpPort: optional port to inject into CDP cookie sourcePort (for matching test server)
+async function launchCheckRegistry(cdpPort) {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const realCdp = await context.newCDPSession(page);
+  let hiddenOpened = 0;
+
+  // Wrap CDP to inject the correct sourcePort for test server matching
+  const cdp = {
+    send: async (method, params) => {
+      const result = await realCdp.send(method, params);
+      if (method === 'Network.getCookies' && result.cookies && cdpPort) {
+        result.cookies = result.cookies.map(c => ({ ...c, sourcePort: cdpPort }));
+      }
+      return result;
+    }
+  };
+
+  const browserSession = {
+    _context: context,
+    _pages: new Map([[1, { page, cdp }]]),
+    openHiddenPage: async () => {
+      hiddenOpened++;
+      return context.newPage();
+    },
+    closeHiddenPage: async (p) => { await p.close(); }
+  };
+  return { browser, context, browserSession, hiddenOpens: () => hiddenOpened };
+}
+
+test('SessionRegistry.check full reports invalid on redirect to login URL', async () => {
+  const { server, url } = await serveCheckSite((req, res) => {
+    if (req.url === '/') {
+      res.writeHead(302, { location: `${url}/login` });
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body>sign in</body></html>');
+  });
+  const port = server.address().port;
+  const { browser, context, browserSession } = await launchCheckRegistry(port);
+  try {
+    await context.addCookies([{ name: 'sid', value: '1', domain: '127.0.0.1', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+    const result = await registry.check('127.0.0.1', 'full');
+
+    strictEqual(result.valid, false);
+    strictEqual(result.strategy, 'full');
+    strictEqual(result.signals.redirectedToLogin, true);
+    ok(result.checkedAt > 0);
+    ok(result.finalUrl.includes('/login'));
+    ok(Array.isArray(result.signals.login));
+    ok(result.signals.score <= -1, 'score indicates not logged in');
+  } finally {
+    await context.close(); await browser.close(); server.close();
+  }
+});
+
+test('SessionRegistry.check full reports invalid on password input', async () => {
+  const { server, url } = await serveCheckSite((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body><input type="password" name="pwd"></body></html>');
+  });
+  const port = server.address().port;
+  const { browser, context, browserSession } = await launchCheckRegistry(port);
+  try {
+    await context.addCookies([{ name: 'sid', value: '1', domain: '127.0.0.1', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+    const result = await registry.check('127.0.0.1', 'full');
+
+    strictEqual(result.valid, false);
+    strictEqual(result.signals.redirectedToLogin, false);
+    ok(result.signals.login.includes('input[type=password]'), 'detected password input');
+    ok(result.signals.score <= -1, 'score indicates not logged in');
+  } finally {
+    await context.close(); await browser.close(); server.close();
+  }
+});
+
+test('SessionRegistry.check full reports unknown when no signal fires', async () => {
+  const { server, url } = await serveCheckSite((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body><h1>dashboard</h1></body></html>');
+  });
+  const port = server.address().port;
+  const { browser, context, browserSession } = await launchCheckRegistry(port);
+  try {
+    await context.addCookies([{ name: 'sid', value: '1', domain: '127.0.0.1', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+    const result = await registry.check('127.0.0.1', 'full');
+
+    strictEqual(result.valid, null);  // unknown - cannot confirm login status
+    strictEqual(result.signals.redirectedToLogin, false);
+    ok(Array.isArray(result.signals.loggedIn), 'loggedIn signals array exists');
+    ok(Array.isArray(result.signals.login), 'login signals array exists');
+    strictEqual(result.signals.score, 0, 'no signals detected');
+  } finally {
+    await context.close(); await browser.close(); server.close();
+  }
+});
+
+test('SessionRegistry.check full reports unknown on navigation timeout', async () => {
+  const { server, url } = await serveCheckSite((req, res) => {
+    setTimeout(() => {}, 60000);  // never respond
+  });
+  const port = server.address().port;
+  const { browser, context, browserSession } = await launchCheckRegistry(port);
+  try {
+    await context.addCookies([{ name: 'sid', value: '1', domain: '127.0.0.1', path: '/' }]);
+    const registry = new SessionRegistry({ browserSession });
+    const result = await registry.check('127.0.0.1', 'full', { timeoutMs: 1500 });
+
+    strictEqual(result.valid, null);
+    strictEqual(result.note, 'timeout');
+    strictEqual(result.strategy, 'full');
+  } finally {
+    await context.close(); await browser.close(); server.close();
+  }
+});
+
+test('SessionRegistry.check full closes hidden page even on failure', async () => {
+  const closed = [];
+  let opened = null;
+  const browserSession = {
+    _context: { cookies: async () => [{ name: 's', value: '1', domain: 'example.com', path: '/' }] },
+    _pages: new Map([[1, { cdp: { send: async () => ({ cookies: [{ name: 's', value: '1', domain: 'example.com', path: '/', sourcePort: 443, sourceScheme: 'Secure' }] }) } }]]),
+    openHiddenPage: async () => {
+      opened = { goto: async () => { throw new Error('net::ERR_CONNECTION_REFUSED'); }, $: async () => null, url: () => 'https://example.com', close: async () => {} };
+      return opened;
+    },
+    closeHiddenPage: async (p) => { closed.push(p); await p.close(); }
+  };
+  const registry = new SessionRegistry({ browserSession });
+  const result = await registry.check('example.com', 'full');
+
+  strictEqual(result.valid, null);
+  strictEqual(closed.length, 1);
+  strictEqual(closed[0], opened);
+});
+
+test('SessionRegistry.check picks highest-cookieCount origin URL, falls back to https://domain', async () => {
+  const fakeCdp = {
+    send: async () => ({
+      cookies: [
+        { name: 'a', value: '1', domain: '127.0.0.1', path: '/', sourcePort: 8080, sourceScheme: 'NonSecure' },
+        { name: 'b', value: '2', domain: '127.0.0.1', path: '/', sourcePort: 8080, sourceScheme: 'NonSecure' },
+        { name: 'c', value: '3', domain: '127.0.0.1', path: '/', sourcePort: 9090, sourceScheme: 'NonSecure' },
+      ]
+    })
+  };
+  const contextStub = {
+    cookies: async () => [
+      { name: 'a', value: '1', domain: '127.0.0.1', path: '/' },
+      { name: 'b', value: '2', domain: '127.0.0.1', path: '/' },
+      { name: 'c', value: '3', domain: '127.0.0.1', path: '/' },
+    ],
+  };
+  const navs = [];
+  const browserSession = {
+    _context: contextStub,
+    _pages: new Map([[1, { cdp: fakeCdp }]]),
+    openHiddenPage: async () => ({ goto: async (u) => { navs.push(u); }, $: async () => null, url: () => navs[navs.length - 1], close: async () => {} }),
+    closeHiddenPage: async (p) => { await p.close(); }
+  };
+  const registry = new SessionRegistry({ browserSession });
+  await registry.check('127.0.0.1', 'full');
+  strictEqual(navs[0], 'http://127.0.0.1:8080', '2-cookie origin beats 1-cookie origin');
+
+  // No origins (CDP returns nothing usable) → https://{domain} fallback.
+  const fallbackCdp = { send: async () => ({ cookies: [] }) };
+  const fallbackSession = {
+    _context: { cookies: async () => [] },
+    _pages: new Map([[1, { cdp: fallbackCdp }]]),
+    openHiddenPage: async () => ({ goto: async (u) => { navs.push(u); }, $: async () => null, url: () => navs[navs.length - 1], close: async () => {} }),
+    closeHiddenPage: async (p) => { await p.close(); }
+  };
+  const registry2 = new SessionRegistry({ browserSession: fallbackSession });
+  const r2 = await registry2.check('example.com', 'full');
+  strictEqual(navs[1], 'https://example.com');
+  ok(r2);
+});
+
+// ===== lastCheck in list + rate-limit/dedup =====
+
+test('SessionRegistry.list carries lastCheck after a check', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  await context.addCookies([{ name: 'sid', value: '1', domain: 'example.com', path: '/' }]);
+  try {
+    const registry = new SessionRegistry({ browserSession });
+    await registry.check('example.com', 'quick');
+    const sessions = await registry.list();
+
+    const example = sessions.find(s => s.domain === 'example.com');
+    ok(example.lastCheck, 'lastCheck present');
+    strictEqual(example.lastCheck.valid, true);
+    strictEqual(example.lastCheck.strategy, 'quick');
+    ok(example.lastCheck.checkedAt > 0);
+    strictEqual(Object.keys(example.lastCheck).length, 3, 'only valid/strategy/checkedAt');
+  } finally {
+    await context.close(); await browser.close();
+  }
+});
+
+test('SessionRegistry.list omits lastCheck when never checked', async () => {
+  const { browser, context, browserSession } = await launchRegistry();
+  await context.addCookies([{ name: 'sid', value: '1', domain: 'example.com', path: '/' }]);
+  try {
+    const registry = new SessionRegistry({ browserSession });
+    const sessions = await registry.list();
+    const example = sessions.find(s => s.domain === 'example.com');
+    ok(!('lastCheck' in example), 'no lastCheck key at all');
+  } finally {
+    await context.close(); await browser.close();
+  }
+});
+
+test('SessionRegistry.check rate-limits repeat full checks within 10s', async () => {
+  let opens = 0;
+  const browserSession = {
+    _context: { cookies: async () => [{ name: 's', value: '1', domain: 'example.com', path: '/' }] },
+    _pages: new Map([[1, { cdp: { send: async () => ({ cookies: [{ name: 's', value: '1', domain: 'example.com', path: '/', sourcePort: 443, sourceScheme: 'Secure' }] }) } }]]),
+    openHiddenPage: async () => {
+      opens++;
+      return { goto: async () => {}, $: async () => null, url: () => 'https://example.com', close: async () => {} };
+    },
+    closeHiddenPage: async (p) => { await p.close(); }
+  };
+  const registry = new SessionRegistry({ browserSession });
+  const first = await registry.check('example.com', 'full');
+  strictEqual(first.valid, null);  // unknown - no login signals
+  strictEqual(opens, 1);
+
+  const second = await registry.check('example.com', 'full');
+  strictEqual(opens, 1, 'no second hidden page within 10s');
+  strictEqual(second.note, 'rate-limited');
+  strictEqual(second.valid, null, 'rate-limited returns previous verdict');
+});
+
+test('SessionRegistry.check dedupes concurrent full checks on same domain', async () => {
+  let opens = 0;
+  let releaseGoto;
+  const gate = new Promise(r => { releaseGoto = r; });
+  const browserSession = {
+    _context: { cookies: async () => [{ name: 's', value: '1', domain: 'example.com', path: '/' }] },
+    _pages: new Map([[1, { cdp: { send: async () => ({ cookies: [{ name: 's', value: '1', domain: 'example.com', path: '/', sourcePort: 443, sourceScheme: 'Secure' }] }) } }]]),
+    openHiddenPage: async () => {
+      opens++;
+      return {
+        goto: async () => { await gate; },   // hold first check open
+        $: async () => null,
+        url: () => 'https://example.com',
+        close: async () => {}
+      };
+    },
+    closeHiddenPage: async (p) => { await p.close(); }
+  };
+  const registry = new SessionRegistry({ browserSession });
+  const p1 = registry.check('example.com', 'full');
+  const p2 = registry.check('example.com', 'full');
+  releaseGoto();
+  const [r1, r2] = await Promise.all([p1, p2]);
+
+  strictEqual(opens, 1, 'both calls share one hidden page');
+  strictEqual(r1.valid, null);  // unknown - no login signals
+  strictEqual(r2.valid, null);
+  strictEqual(r1.checkedAt, r2.checkedAt, 'same recorded result');
 });

@@ -1,6 +1,36 @@
 // src/session/SessionRegistry.js
 import { logger } from '../utils/logger.js';
 
+const CHECK_GOTO_TIMEOUT_MS = 15_000;  // single-domain full check budget
+const CHECK_STABLE_POLL_MS = 500;      // SPA redirect-chain settle poll interval
+const CHECK_STABLE_MAX_MS = 5_000;     // max settle wait
+const CHECK_RATE_LIMIT_MS = 10_000;    // same-domain re-check cooldown
+const LOGIN_URL_RE = /login|signin|sign-in|auth|passport/i;
+
+// Risk control: random delay before validation (ms)
+const CHECK_DELAY_MIN_MS = 500;
+const CHECK_DELAY_MAX_MS = 1500;
+
+// Login detection signals (CSS selectors)
+const LOGGED_IN_SIGNALS = [
+  // User profile elements
+  '[class*="avatar"]', '[class*="user"]', '[class*="profile"]', '[class*="account"]',
+  '[id*="avatar"]', '[id*="user"]', '[id*="profile"]', '[id*="account"]',
+  // Logout links (strong indicator of logged-in state)
+  'a[href*="logout"]', 'a[href*="signout"]', 'a[href*="logoff"]',
+  // Common user menu patterns
+  '.user-menu', '.user-dropdown', '.profile-menu', '.account-menu'
+];
+
+const LOGIN_LINK_SIGNALS = [
+  // Login/Register links
+  'a[href*="login"]', 'a[href*="signin"]', 'a[href*="register"]', 'a[href*="signup"]',
+  // Common login button classes
+  '.login-btn', '.signin-btn', '.register-btn', '.signup-btn',
+  // Password input (already detected separately)
+  'input[type=password]'
+];
+
 /**
  * SessionRegistry - 管理已保存的登录状态
  *
@@ -11,6 +41,9 @@ import { logger } from '../utils/logger.js';
 export class SessionRegistry {
   constructor({ browserSession }) {
     this._browserSession = browserSession;
+    this._checkResults = new Map();   // domain → last check result (memory only)
+    this._checkInFlight = new Map();  // domain → in-flight check Promise
+    this._lastCheckAt = new Map();    // domain → ms timestamp (rate limiting)
   }
 
   // Internal: any page's CDP session works — Network.getCookies is a
@@ -58,14 +91,26 @@ export class SessionRegistry {
     const groups = this._groupCookies(cookies);
 
     return [...groups.entries()]
-      .map(([domain, g]) => ({
-        domain,
-        cookieCount: g.cookieCount,
-        origins: [...g.origins.entries()]
-          .map(([url, count]) => ({ url, cookieCount: count }))
-          .sort((a, b) => b.cookieCount - a.cookieCount)
-      }))
-      .sort((a, b) => b.cookieCount - a.cookieCount);
+      .map(([domain, g]) => {
+        const item = {
+          domain,
+          cookieCount: g.cookieCount,
+          origins: [...g.origins.entries()]
+            .map(([url, count]) => ({ url, cookieCount: count }))
+            .sort((a, b) => b.cookieCount - a.cookieCount)
+        };
+        const lastCheckResult = this._checkResults.get(domain);
+        if (lastCheckResult) {
+          item.lastCheck = {
+            valid: lastCheckResult.valid,
+            strategy: lastCheckResult.strategy,
+            checkedAt: lastCheckResult.checkedAt,
+          };
+        }
+        return item;
+      })
+      // Stable sort: cookieCount desc, then domain asc (preserves order on refresh)
+      .sort((a, b) => b.cookieCount - a.cookieCount || a.domain.localeCompare(b.domain));
   }
 
   // Internal: group cookies into domain-keyed entries (level 1: cookie
@@ -186,21 +231,193 @@ export class SessionRegistry {
   }
 
   /**
-   * 验证登录态（quick 策略：仅检查 cookie 存在性）
+   * 验证登录态
+   * quick: cookie 存在性。full: 隐藏页访问 + 重定向/密码框信号 → 三态。
    * @param {string} domain
    * @param {string} strategy - 'quick' | 'full' | 'custom'
-   * @returns {Promise<{valid: boolean, details: object}>}
+   * @param {{timeoutMs?: number, checkUrl?: string}} [opts] - 测试注入(生产用默认 15s)
+   * @returns {Promise<{valid: boolean|null, strategy: string, checkedAt: number, finalUrl?: string, signals?: object, note?: string}>}
    */
-  async check(domain, strategy = 'quick') {
+  async check(domain, strategy = 'quick', { timeoutMs = CHECK_GOTO_TIMEOUT_MS, checkUrl } = {}) {
     if (strategy === 'quick') {
       const cookies = await this._fetchCookies();
       const hasCookies = cookies.some(c => c.domain.includes(domain));
-      return {
-        valid: hasCookies,
-        details: { strategy: 'quick', cookieFound: hasCookies }
-      };
+      return this._recordCheck(domain, { valid: hasCookies, strategy });
     }
-    // full 和 custom 策略在后续任务中实现
-    return { valid: false, details: { strategy, message: 'Not implemented' } };
+    if (strategy === 'full') {
+      return this._fullCheck(domain, timeoutMs, checkUrl);
+    }
+    return this._recordCheck(domain, { valid: null, strategy, note: 'not-implemented' });
+  }
+
+  // Internal: store result and stamp the rate-limit clock.
+  _recordCheck(domain, result) {
+    const entry = { ...result, checkedAt: Date.now() };
+    this._checkResults.set(domain, entry);
+    this._lastCheckAt.set(domain, entry.checkedAt);
+    return entry;
+  }
+
+  // Internal: full strategy — hidden page visit, two signals, three states.
+  async _fullCheck(domain, timeoutMs, overrideUrl) {
+    const inFlight = this._checkInFlight.get(domain);
+    if (inFlight) return inFlight;
+
+    const lastAt = this._lastCheckAt.get(domain) ?? 0;
+    if (Date.now() - lastAt < CHECK_RATE_LIMIT_MS) {
+      const prev = this._checkResults.get(domain);
+      if (prev) return { ...prev, note: 'rate-limited' };
+    }
+
+    const promise = this._doFullCheck(domain, timeoutMs, overrideUrl)
+      .finally(() => this._checkInFlight.delete(domain));
+    this._checkInFlight.set(domain, promise);
+    return promise;
+  }
+
+  async _doFullCheck(domain, timeoutMs, overrideUrl) {
+    const browserSession = this._browserSession;
+    if (!browserSession._context) {
+      return this._recordCheck(domain, { valid: null, strategy: 'full', note: 'browser-not-running' });
+    }
+    const cookies = await this._fetchCookies();
+    const group = this._groupCookies(cookies).get(domain);
+    const checkUrl = overrideUrl ?? this._pickCheckUrl(group, domain);
+
+    const page = await browserSession.openHiddenPage();
+    if (!page) {
+      return this._recordCheck(domain, { valid: null, strategy: 'full', note: 'browser-not-running' });
+    }
+    try {
+      // Risk control: random delay before validation
+      await this._randomDelay();
+
+      const finalUrl = await this._gotoStable(page, checkUrl, timeoutMs);
+      const redirectedToLogin = LOGIN_URL_RE.test(finalUrl);
+
+      // Detect signals
+      const loginSignals = await this._detectLoginSignals(page);
+      const loggedInSignals = await this._detectLoggedInSignals(page);
+
+      // Scoring system:
+      // +1 for each logged-in signal (user profile, logout link)
+      // -1 for each login signal (password input, login link)
+      // Final: score >= 1 → logged in; score <= -1 → not logged in; else unknown
+      const score = loggedInSignals.score - loginSignals.score - (redirectedToLogin ? 1 : 0);
+
+      let valid;
+      if (score >= 1) {
+        valid = true;  // Logged in
+      } else if (score <= -1) {
+        valid = false; // Not logged in
+      } else {
+        valid = null;  // Unknown
+      }
+
+      return this._recordCheck(domain, {
+        valid,
+        strategy: 'full',
+        finalUrl,
+        signals: {
+          redirectedToLogin,
+          loggedIn: loggedInSignals.detected,
+          login: loginSignals.detected,
+          score
+        },
+      });
+    } catch (err) {
+      const timedOut = /Timeout .*exceeded/i.test(String(err?.message));
+      return this._recordCheck(domain, {
+        valid: null, strategy: 'full',
+        note: timedOut ? 'timeout' : 'nav-error',
+      });
+    } finally {
+      await browserSession.closeHiddenPage(page);
+    }
+  }
+
+  // Internal: navigate, then wait out SPA redirect chains — poll until the
+  // URL stops changing (or the settle budget runs out).
+  async _gotoStable(page, url, timeoutMs) {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    let last = page.url();
+    const deadline = Date.now() + CHECK_STABLE_MAX_MS;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, CHECK_STABLE_POLL_MS));
+      const current = page.url();
+      if (current === last) break;
+      last = current;
+    }
+    return last;
+  }
+
+  // Internal: detect logged-in signals on the page (user profile, logout links, etc.)
+  async _detectLoggedInSignals(page) {
+    let score = 0;
+    const detected = [];
+
+    for (const selector of LOGGED_IN_SIGNALS) {
+      try {
+        const count = await page.$$eval(selector, els => els.length).catch(() => 0);
+        if (count > 0) {
+          score += 1;
+          detected.push(selector);
+          logger.debug(`[SessionRegistry] Logged-in signal: ${selector} (${count})`);
+        }
+      } catch {}
+    }
+
+    return { score, detected };
+  }
+
+  // Internal: detect login/logout signals on the page (login links, password inputs, etc.)
+  async _detectLoginSignals(page) {
+    let score = 0;
+    const detected = [];
+
+    for (const selector of LOGIN_LINK_SIGNALS) {
+      try {
+        const count = await page.$$eval(selector, els => els.length).catch(() => 0);
+        if (count > 0) {
+          score += 1;
+          detected.push(selector);
+          logger.debug(`[SessionRegistry] Login signal: ${selector} (${count})`);
+        }
+      } catch {}
+    }
+
+    // Additional: detect links by text content (登录/注册/登录/注册)
+    try {
+      const loginTexts = await page.$$eval('a', links =>
+        links.filter(link =>
+          /(登录|注册|登錄|註冊|sign in|log in|sign up|log in)/i.test(link.textContent)
+        ).length
+      ).catch(() => 0);
+      if (loginTexts > 0) {
+        score += 1;
+        detected.push('a:text(登录/注册)');
+        logger.debug(`[SessionRegistry] Login signal: a:text(登录/注册) (${loginTexts})`);
+      }
+    } catch {}
+
+    return { score, detected };
+  }
+
+  // Internal: random delay for risk control (avoid triggering anti-bot systems)
+  async _randomDelay() {
+    const delay = CHECK_DELAY_MIN_MS + Math.random() * (CHECK_DELAY_MAX_MS - CHECK_DELAY_MIN_MS);
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  // Internal: best origin to probe — most cookies carried; else scheme-guess.
+  _pickCheckUrl(group, domain) {
+    if (group && group.origins && group.origins.size > 0) {
+      let bestUrl = null, bestCount = -1;
+      for (const [url, count] of group.origins) {
+        if (count > bestCount) { bestUrl = url; bestCount = count; }
+      }
+      return bestUrl;
+    }
+    return `https://${domain}`;
   }
 }

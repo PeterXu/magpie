@@ -38,15 +38,22 @@ export function createSessionsRoute({ getSessionRegistry, ensureBrowserStarted }
     return c.json({ success: true });
   });
 
-  // 验证登录态
+  // 验证登录态(默认 full:隐藏页访问;quick 仅 cookie 存在性)
   app.post('/:domain/check', async (c) => {
-    const sessionRegistry = getSessionRegistry();
+    let sessionRegistry = getSessionRegistry();
     if (!sessionRegistry) {
-      return c.json({ error: 'Session registry not available' }, 503);
+      // Full check needs a live browser (hidden page); start it like GET / does.
+      if (ensureBrowserStarted) {
+        await ensureBrowserStarted();
+        sessionRegistry = getSessionRegistry();
+      }
+      if (!sessionRegistry) {
+        return c.json({ error: 'Session registry not available' }, 503);
+      }
     }
     const domain = c.req.param('domain');
     const body = await c.req.json().catch(() => ({}));
-    const strategy = body.strategy || 'quick';
+    const strategy = body.strategy || 'full';
     const result = await sessionRegistry.check(domain, strategy);
     return c.json(result);
   });

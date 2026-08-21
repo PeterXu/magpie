@@ -119,3 +119,57 @@ test('DELETE /api/sessions/:domain/cookies/:name calls registry.deleteCookie', a
   const data = await res.json();
   strictEqual(data.success, true);
 });
+
+test('POST /api/sessions/:domain/check defaults to full strategy', async () => {
+  let seenStrategy = null;
+  const registry = {
+    check: async (domain, strategy) => {
+      strictEqual(domain, 'example.com');
+      seenStrategy = strategy;
+      return { valid: true, strategy };
+    }
+  };
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({ getSessionRegistry: () => registry }));
+
+  const res = await app.request('/api/sessions/example.com/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})          // no strategy → full
+  });
+  strictEqual(res.status, 200);
+  strictEqual(seenStrategy, 'full');
+  strictEqual((await res.json()).valid, true);
+});
+
+test('POST /api/sessions/:domain/check starts browser when not running', async () => {
+  let registry = null;
+  let started = 0;
+  const makeRegistry = () => ({
+    check: async () => ({ valid: true, strategy: 'full', checkedAt: 1 })
+  });
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({
+    getSessionRegistry: () => registry,
+    ensureBrowserStarted: async () => { started++; registry = makeRegistry(); }
+  }));
+
+  const res = await app.request('/api/sessions/example.com/check', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  });
+  strictEqual(res.status, 200);
+  strictEqual(started, 1, 'ensureBrowserStarted called once');
+  strictEqual((await res.json()).valid, true);
+});
+
+test('POST /api/sessions/:domain/check returns 503 when browser cannot start', async () => {
+  const app = new Hono();
+  app.route('/api/sessions', createSessionsRoute({
+    getSessionRegistry: () => null,
+    ensureBrowserStarted: async () => {}
+  }));
+  const res = await app.request('/api/sessions/example.com/check', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  });
+  strictEqual(res.status, 503);
+});

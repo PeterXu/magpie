@@ -485,6 +485,83 @@
       text-decoration: underline;
     }
 
+    .session-status {
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    .session-status .badge-valid   { color: #52c41a; font-weight: 500; }
+    .session-status .badge-invalid { color: #f56c6c; font-weight: 500; }
+    .session-status .badge-unknown { color: #8892b0; font-weight: 500; }
+    .session-status .badge-meta    { color: #8892b0; }
+
+    /* Toast styles */
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 24px;
+      border-radius: 4px;
+      color: #fff;
+      font-size: 14px;
+      z-index: 2000;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .toast.show { opacity: 1; }
+    .toast.success { background: #52c41a; }
+    .toast.error { background: #f56c6c; }
+    .toast.warning { background: #faad14; }
+
+    /* Session group styles */
+    .session-group {
+      background: #fff;
+      border: 1px solid #e8e8e8;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .session-group-header {
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    .session-group-header:hover {
+      background: #fafafa;
+    }
+    .session-group-arrow {
+      font-size: 10px;
+      color: #8892b0;
+      width: 12px;
+    }
+    .session-group-domain {
+      font-size: 15px;
+      font-weight: 500;
+      color: #2c3e50;
+    }
+    .session-group-count {
+      font-size: 12px;
+      color: #8892b0;
+      margin-left: auto;
+    }
+    .session-group-items {
+      display: none;
+      border-top: 1px solid #e8e8e8;
+    }
+    .session-group.expanded .session-group-items {
+      display: block;
+    }
+    .session-subitem {
+      margin: 8px;
+      border: 1px solid #f0f0f0;
+    }
+    .session-subitem .session-domain {
+      font-size: 13px;
+    }
+
     /* Modal styles */
     .modal-overlay {
       position: fixed;
@@ -600,6 +677,9 @@
   </style>
 </head>
 <body>
+  <!-- Toast container -->
+  <div id="toast"></div>
+
   <div id="left-panel">
     <!-- Logo area -->
     <div class="logo-area">
@@ -1023,10 +1103,41 @@
         return;
       }
 
-      sessionsListEl.innerHTML = sessions.map(session => `
+      // Group by root domain for folding display
+      const grouped = {};
+      sessions.forEach(s => {
+        const root = getRootDomain(s.domain);
+        if (!grouped[root]) grouped[root] = [];
+        grouped[root].push(s);
+      });
+
+      sessionsListEl.innerHTML = Object.entries(grouped)
+        .map(([root, items]) => {
+          if (items.length === 1) {
+            // Single item: no folding
+            return renderSessionItem(items[0]);
+          } else {
+            // Multiple items: foldable group
+            return renderSessionGroup(root, items);
+          }
+        })
+        .join('');
+    }
+
+    function getRootDomain(domain) {
+      const parts = domain.split('.');
+      // Handle special cases like .baidu.com (domain cookie)
+      if (parts[0] === '') return parts.slice(1).join('.');
+      // Normal case: extract last 2 parts
+      return parts.length >= 2 ? parts.slice(-2).join('.') : domain;
+    }
+
+    function renderSessionItem(session) {
+      return `
         <div class="session-item" data-domain="${session.domain}">
           <div>
             <div class="session-domain">${session.domain}</div>
+            ${renderStatusLine(session.lastCheck)}
             <div class="session-stats">Cookies: ${session.cookieCount || 0}</div>
             ${(session.origins || []).map(o => `
               <div class="session-origin" onclick="visitOrigin('${o.url}')">${o.url} · ${o.cookieCount}</div>
@@ -1034,12 +1145,51 @@
           </div>
           <div class="session-actions">
             <button onclick="showDetailsModal('${session.domain}')">详情</button>
-            <button onclick="checkDomain('${session.domain}')">验证</button>
+            <button onclick="checkDomain('${session.domain}', this)">验证</button>
             <button class="danger" onclick="deleteDomain('${session.domain}')">删除</button>
           </div>
         </div>
-      `).join('');
+      `;
     }
+
+    function renderSessionGroup(root, items) {
+      const totalCookies = items.reduce((sum, s) => sum + s.cookieCount, 0);
+      const expanded = window.sessionGroupExpanded?.has(root) ? 'expanded' : '';
+      const latestCheck = items
+        .map(s => s.lastCheck)
+        .filter(Boolean)
+        .sort((a, b) => b.checkedAt - a.checkedAt)[0];
+
+      return `
+        <div class="session-group ${expanded}" data-root="${root}">
+          <div class="session-group-header" onclick="toggleSessionGroup('${root}')">
+            <span class="session-group-arrow">${expanded ? '▼' : '▶'}</span>
+            <span class="session-group-domain">${root}</span>
+            <span class="session-group-count">${items.length} 个服务 · ${totalCookies} cookies</span>
+          </div>
+          ${renderStatusLine(latestCheck)}
+          <div class="session-group-items">
+            ${items.map(item => `
+              <div class="session-item session-subitem" data-domain="${item.domain}">
+                <div>
+                  <div class="session-domain">${item.domain}</div>
+                  <div class="session-stats">Cookies: ${item.cookieCount || 0}</div>
+                  ${(item.origins || []).slice(0, 2).map(o => `
+                    <div class="session-origin" onclick="visitOrigin('${o.url}')">${o.url} · ${o.cookieCount}</div>
+                  `).join('')}
+                </div>
+                <div class="session-actions">
+                  <button onclick="event.stopPropagation(); checkDomain('${item.domain}', this)">验证</button>
+                  <button class="danger" onclick="event.stopPropagation(); deleteDomain('${item.domain}')">删除</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    window.sessionGroupExpanded = new Set();
 
     function visitOrigin(url) {
       // Switch to webrtc panel and navigate to the recorded origin URL
@@ -1049,7 +1199,44 @@
       goBtn.click();
     }
 
+    function toggleSessionGroup(root) {
+      if (window.sessionGroupExpanded.has(root)) {
+        window.sessionGroupExpanded.delete(root);
+      } else {
+        window.sessionGroupExpanded.add(root);
+      }
+      loadSessions(); // Re-render with updated state
+    }
+
     const detailsCache = new Map(); // domain → cookies array; cleared on loadSessions
+
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = `toast ${type} show`;
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 3000);
+    }
+
+    function formatRelativeTime(ts) {
+      const diff = Date.now() - ts;
+      if (diff < 60_000) return '刚刚';
+      if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+      if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+      return `${Math.floor(diff / 86_400_000)}天前`;
+    }
+
+    function renderStatusLine(lastCheck) {
+      if (!lastCheck) return '';
+      const { valid, strategy, checkedAt } = lastCheck;
+      const badge = valid === null || valid === undefined
+        ? '<span class="badge-unknown">? 未知</span>'
+        : valid
+          ? '<span class="badge-valid">✓ 已登录</span>'
+          : '<span class="badge-invalid">✗ 未登录</span>';
+      return `<div class="session-status">${badge}<span class="badge-meta"> · ${strategy} · ${formatRelativeTime(checkedAt)}</span></div>`;
+    }
 
     function formatExpires(ts) {
       if (!ts) return '会话';
@@ -1154,23 +1341,30 @@
       }
     }
 
-    async function checkDomain(domain) {
+    async function checkDomain(domain, btn) {
+      if (btn) { btn.disabled = true; btn.textContent = '验证中…'; }
       try {
         const response = await fetch(`/api/sessions/${encodeURIComponent(domain)}/check`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` }
         });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = await response.json();
-        alert(result.valid ? '登录状态有效' : '登录状态已失效');
-        loadSessions(); // Refresh list
+        await loadSessions();          // refresh list — lastCheck now present
+
+        // Show result toast
+        if (result.valid === true) {
+          showToast('验证完成：已登录', 'success');
+        } else if (result.valid === false) {
+          showToast('验证完成：未登录', 'error');
+        } else {
+          showToast('验证完成：未知状态', 'warning');
+        }
       } catch (err) {
         console.error('[Sessions] Check failed:', err);
-        alert('验证失败');
+        showToast('验证失败', 'error');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '验证'; }
       }
     }
 
@@ -1210,6 +1404,7 @@
 
     // Expose functions globally for inline onclick handlers
     window.visitOrigin = visitOrigin;
+    window.toggleSessionGroup = toggleSessionGroup;
     window.checkDomain = checkDomain;
     window.deleteDomain = deleteDomain;
     window.showDetailsModal = showDetailsModal;
